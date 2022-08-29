@@ -103,7 +103,7 @@ class Config:
             },
             'expire_after': ceil(1.5 * update_interval),
             'unique_id': 'hdsentinel_{}_{}'.format(self.__serial_no, query_key),
-            'name': 'hdsentinel_{}_{}'.format(self.__alias, name),
+            'name': '{}_{}'.format(self.__alias, name),
             'availability_topic': self.__availability_topic,
             'state_topic': self.__mqtt_state_topic,
             'json_attributes_topic': self.__mqtt_state_topic,
