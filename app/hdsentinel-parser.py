@@ -251,9 +251,9 @@ def main():
     use_debugpy = os.getenv('USE_DEBUGPY', '0') == '1'
     debugpy_port = os.getenv('DEBUGPY_PORT', 5678)
     mqtt_port = int(os.getenv('MQTT_PORT', 1883))
-    mqtt_host = os.getenv('MQTT_HOST', '192.168.88.144')
-    mqtt_user = os.getenv('MQTT_USER', 'mqttuser')
-    mqtt_password = os.getenv('MQTT_PASSWORD', 'Wp7FICzEoyWV')
+    mqtt_host = os.getenv('MQTT_HOST', 'localhost')
+    mqtt_user = os.getenv('MQTT_USER')
+    mqtt_password = os.getenv('MQTT_PASSWORD')
 
     mqtt_auth = {'username': mqtt_user,
                  'password': mqtt_password} if mqtt_user and mqtt_password else None

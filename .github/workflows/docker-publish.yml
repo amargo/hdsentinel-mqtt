@@ -65,10 +65,10 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: gszoboszlai/hdsentinel-mqtt-ha:latest
 
-      - name: Sign the published Docker latest image
-        if: ${{ github.event_name != 'pull_request' }}
-        env:
-          COSIGN_EXPERIMENTAL: "true"
-        # This step uses the identity token to provision an ephemeral certificate
-        # against the sigstore community Fulcio instance.
-        run: cosign sign gszoboszlai/hdsentinel-mqtt-ha:latest 
+      # - name: Sign the published Docker latest image
+      #   if: ${{ github.event_name != 'pull_request' }}
+      #   env:
+      #     COSIGN_EXPERIMENTAL: "true"
+      #   # This step uses the identity token to provision an ephemeral certificate
+      #   # against the sigstore community Fulcio instance.
+      #   run: cosign sign gszoboszlai/hdsentinel-mqtt-ha:latest 
