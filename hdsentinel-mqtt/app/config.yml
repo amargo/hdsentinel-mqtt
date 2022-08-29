@@ -1,0 +1,95 @@
+---
+sensor:
+  number:
+    _key: hard_disk_number
+    _type: int
+
+  device:
+    _key: hard_disk_device
+    _type: str
+
+  interface:
+    _key: interface
+    _type: str
+
+  model_id:
+    _key: hard_disk_model_id
+    _type: str
+
+  revision:
+    _key: firmware_revision
+    _type: str
+  
+  serial_no:
+    _key: hard_disk_serial_number
+    _type: str
+
+  total_size:
+    _key: total_size
+    _type: float
+    entity_category: diagnostic
+    state_class: measurement
+    unit_of_measurement: 'mb'
+
+  current_temperature:
+    _key: current_temperature
+    _type: float
+    device_class: temperature
+    state_class: measurement
+    unit_of_measurement: '°c'
+
+  max_temp:
+    _key: maximum_temperature_during_entire_lifespan
+    _type: float
+    device_class: temperature
+    state_class: measurement
+    unit_of_measurement: '°c'
+
+  power_on_time:
+    _key: power_on_time
+    _type: int
+    state_class: diagnostic
+    unit_of_measurement: 'days'
+    icon: mdi:clock
+    # value_template: |-
+    #   {{ ((value_json.power_on_time | float) }}
+
+  estimated_lifetime:
+    _key: estimated_remaining_lifetime
+    _type: int
+    state_class: diagnostic
+    unit_of_measurement: 'days'
+    icon: mdi:clock-alert
+    # value_template: |-
+    #   {{ ((value_json.estimated_lifetime | float) }}
+
+  lifetime_writes:
+    _key: lifetime_writes
+    _type: float
+    entity_category: diagnostic
+    state_class: measurement
+    unit_of_measurement: 'tb'
+    # value_template: |-
+    #   {{ ((value_json.estimated_lifetime | float) }}
+
+  health:
+    _key: health
+    _type: float
+    entity_category: diagnostic
+    state_class: measurement
+    unit_of_measurement: '%'
+
+  performance:
+    _key: performance
+    _type: float
+    entity_category: diagnostic
+    state_class: measurement
+    unit_of_measurement: '%'
+
+  description:
+    _key: description
+    _type: str
+
+  tip:
+    _key: tip
+    _type: str
