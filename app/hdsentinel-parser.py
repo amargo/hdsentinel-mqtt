@@ -200,7 +200,8 @@ def configure_logging(debug_logging: bool) -> None:
 def get_disks():
     workdir = os.path.dirname(os.path.realpath(__file__))
 
-    os.system(r'/usr/sbin/hdsentinel -xml -r {0}/hdsentinel_output.xml'.format(workdir))
+    os.system(
+        r'/usr/sbin/hdsentinel -solid -xml -r {0}/hdsentinel_output.xml'.format(workdir))
     # stdout = check_output(["/usr/sbin/hdsentinel", "-xml", "-r", "hdsentinel_output.xml"], encoding='UTF-8')
     _LOGGER.info('Generate xml with hdsentinel...')
 
@@ -251,7 +252,7 @@ def main():
     use_debugpy = os.getenv('USE_DEBUGPY', '0') == '1'
     debugpy_port = os.getenv('DEBUGPY_PORT', 5678)
     mqtt_port = int(os.getenv('MQTT_PORT', 1883))
-    mqtt_host = os.getenv('MQTT_HOST', 'localhost')
+    mqtt_host = os.getenv('MQTT_HOST')
     mqtt_user = os.getenv('MQTT_USER')
     mqtt_password = os.getenv('MQTT_PASSWORD')
 
