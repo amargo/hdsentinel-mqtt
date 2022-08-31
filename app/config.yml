@@ -36,14 +36,14 @@ sensor:
     _type: float
     device_class: temperature
     state_class: measurement
-    unit_of_measurement: '°c'
+    unit_of_measurement: '°C'
 
   max_temp:
     _key: maximum_temperature_during_entire_lifespan
     _type: float
     device_class: temperature
     state_class: measurement
-    unit_of_measurement: '°c'
+    unit_of_measurement: '°C'
 
   power_on_time:
     _key: power_on_time
