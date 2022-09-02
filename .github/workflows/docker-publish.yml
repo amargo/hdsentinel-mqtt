@@ -42,7 +42,7 @@ jobs:
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
-          tags: gszoboszlai/hdsentinel-mqtt-ha:3.10-alpine3.15-${{ github.run_number }}
+          tags: gszoboszlai/hdsentinel-mqtt-ha:python3.10-alpine3.15-${{ github.run_number }}
        
       # Sign the resulting Docker image digest except on PRs.
       # This will only write to the public Rekor transparency log when the Docker
