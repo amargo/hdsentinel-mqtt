@@ -48,20 +48,18 @@ sensor:
   power_on_time:
     _key: power_on_time
     _type: int
-    state_class: diagnostic
+    entity_category: diagnostic
+    state_class: measurement
     unit_of_measurement: 'days'
     icon: mdi:clock
-    # value_template: |-
-    #   {{ ((value_json.power_on_time | float) }}
 
   estimated_lifetime:
     _key: estimated_remaining_lifetime
     _type: int
-    state_class: diagnostic
+    entity_category: diagnostic
+    state_class: measurement
     unit_of_measurement: 'days'
     icon: mdi:clock-alert
-    # value_template: |-
-    #   {{ ((value_json.estimated_lifetime | float) }}
 
   lifetime_writes:
     _key: lifetime_writes
@@ -69,8 +67,6 @@ sensor:
     entity_category: diagnostic
     state_class: measurement
     unit_of_measurement: 'tb'
-    # value_template: |-
-    #   {{ ((value_json.estimated_lifetime | float) }}
 
   health:
     _key: health
