@@ -86,7 +86,7 @@ sensor:
     _key: description
     _type: str
     value_template: |-
-      {{ value_json.description | truncate(255) }}    
+      {{ value_json.description | truncate(255) }}
 
   tip:
     _key: tip
