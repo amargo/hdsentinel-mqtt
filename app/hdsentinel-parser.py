@@ -16,26 +16,29 @@ from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional
 from yaml import safe_load
 
-# replacement strings
-WINDOWS_LINE_ENDING = b'\r\n'
-UNIX_LINE_ENDING = b'\n'
+# from dotenv import load_dotenv
 
-DEFAULT_TYPE_NAME = 'str'
+# replacement strings
+WINDOWS_LINE_ENDING = b"\r\n"
+UNIX_LINE_ENDING = b"\n"
+
+DEFAULT_TYPE_NAME = "str"
 VALUE_TYPES = {
-    'float': float,
-    'int': int,
-    'str': str,
+    "float": float,
+    "int": int,
+    "str": str,
 }
 
 SensorConfig = NamedTuple(
-    'SensorConfig', [('topic', str), ('payload', Dict['str', Any])])
+    "SensorConfig", [("topic", str), ("payload", Dict["str", Any])]
+)
 
 __FILE = Path(__file__)
 _LOGGER = logging.getLogger(__FILE.name)
 BASE_DIR = __FILE.parent
 
 MQTT_CLIENT_ID = __FILE.name
-MQTT_TOPIC = 'hdsentinel'
+MQTT_TOPIC = "hdsentinel"
 
 update_interval = 600
 exiting_main_loop = False
@@ -43,11 +46,19 @@ exiting_main_loop = False
 
 class Config:
     SENSOR_TYPES = (
-        'binary_sensor',
-        'sensor',
+        "binary_sensor",
+        "sensor",
     )
 
-    def __init__(self, serial_no, alias, model, firmware, mqtt_state_topic: str, mqtt_availability_topic: str):
+    def __init__(
+        self,
+        serial_no,
+        alias,
+        model,
+        firmware,
+        mqtt_state_topic: str,
+        mqtt_availability_topic: str,
+    ):
 
         self.__serial_no = serial_no
         self.__alias = alias
@@ -56,7 +67,7 @@ class Config:
         self.__mqtt_state_topic = mqtt_state_topic
         self.__availability_topic = mqtt_availability_topic
 
-        with BASE_DIR.joinpath('config.yml').open() as fd:
+        with BASE_DIR.joinpath("config.yml").open() as fd:
             raw_config = safe_load(fd)
 
         self.__value_types = {}
@@ -65,7 +76,8 @@ class Config:
             raw_sensors = raw_config.get(sensor_type) or {}
             sorted_raw_sensors = sorted(raw_sensors.items())
             _LOGGER.debug(
-                f'raw_sensors len: {len(sorted_raw_sensors)}: {sorted_raw_sensors}')
+                f"raw_sensors len: {len(sorted_raw_sensors)}: {sorted_raw_sensors}"
+            )
 
             for name, config in sorted_raw_sensors:
                 if config is None:
@@ -73,44 +85,48 @@ class Config:
 
                 internal_config = self.__pop_internal_config(config)
 
-                query_key = internal_config.get('key', name)
+                query_key = internal_config.get("key", name)
 
-                self.__value_types[query_key] = VALUE_TYPES[internal_config.get(
-                    'type', DEFAULT_TYPE_NAME)]
-                self.__sensors.append(self.__get_device_descriptor(
-                    sensor_type, name, query_key, config))
+                self.__value_types[query_key] = VALUE_TYPES[
+                    internal_config.get("type", DEFAULT_TYPE_NAME)
+                ]
+                self.__sensors.append(
+                    self.__get_device_descriptor(sensor_type, name, query_key, config)
+                )
 
     def __pop_internal_config(self, config: dict) -> dict:
         return {
-            key.lstrip('_').lower(): config.pop(key)
+            key.lstrip("_").lower(): config.pop(key)
             for key in list(config)
-            if key.startswith('_')
+            if key.startswith("_")
         }
 
-    def __get_device_descriptor(self, sensor_type: str, name: str, query_key: str, config: dict) -> SensorConfig:
-        topic = 'homeassistant/{}/hdsentinel_{}/{}/config'.format(
-            sensor_type, self.__alias, query_key)
-
+    def __get_device_descriptor(
+        self, sensor_type: str, name: str, query_key: str, config: dict
+    ) -> SensorConfig:
+        topic = (
+            f"homeassistant/{sensor_type}/hdsentinel_{self.__alias}/{query_key}/config"
+        )
         payload = {
-            'device': {
-                'identifiers': [
-                    'hdsentinel_{}'.format(self.__serial_no),
+            "device": {
+                "identifiers": [
+                    f"hdsentinel_{self.__serial_no}",
                 ],
-                'manufacturer': 'hdsentinel',
-                'name': self.__alias,
-                'model': self.__model,
-                'sw_version': self.__firmware,
+                "manufacturer": "hdsentinel",
+                "name": self.__alias,
+                "model": self.__model,
+                "sw_version": self.__firmware,
             },
-            'expire_after': ceil(1.5 * update_interval),
-            'unique_id': 'hdsentinel_{}_{}'.format(self.__serial_no, query_key),
-            'name': '{}_{}'.format(self.__alias, name),
-            'availability_topic': self.__availability_topic,
-            'state_topic': self.__mqtt_state_topic,
-            'json_attributes_topic': self.__mqtt_state_topic,
-            'value_template': '{{{{value_json.{}}}}}'.format(query_key),
+            "expire_after": ceil(1.5 * update_interval),
+            "unique_id": f"hdsentinel_{self.__serial_no}_{query_key}",
+            "name": f"{self.__alias}_{name}",
+            "availability_topic": self.__availability_topic,
+            "state_topic": self.__mqtt_state_topic,
+            "json_attributes_topic": self.__mqtt_state_topic,
+            "value_template": f"{{{{value_json.{query_key}}}}}",
         }
 
-        _LOGGER.debug('Update payload config file {!r}'.format(config))
+        _LOGGER.debug("Update payload config file {!r}".format(config))
         payload.update(config)
 
         return SensorConfig(topic, payload)
@@ -125,12 +141,14 @@ class Config:
 
 
 class MqttClient:
-    def __init__(self, broker_host: str, broker_port: int, broker_auth: Optional[dict] = None):
+    def __init__(
+        self, broker_host: str, broker_port: int, broker_auth: Optional[dict] = None
+    ):
         self.__connection_options = {
-            'hostname': broker_host,
-            'port': broker_port,
-            'auth': broker_auth,
-            'client_id': MQTT_CLIENT_ID
+            "hostname": broker_host,
+            "port": broker_port,
+            "auth": broker_auth,
+            "client_id": MQTT_CLIENT_ID,
         }
 
     def publish_multiple(self, payloads: List[Dict[str, Any]], **kwargs) -> None:
@@ -143,7 +161,7 @@ class MqttClient:
 class HaCapableMqttClient(MqttClient):
     def __init__(self, base_topic: str, **kwargs):
         self.__base_topic = base_topic
-        self.__status_topic = self.get_abs_topic('availability')
+        self.__status_topic = self.get_abs_topic("availability")
 
         self.__published_status = None
 
@@ -154,22 +172,22 @@ class HaCapableMqttClient(MqttClient):
         return self.__status_topic
 
     def get_abs_topic(self, *relative_topic: str) -> str:
-        return '/'.join([self.__base_topic] + list(relative_topic))
+        return "/".join([self.__base_topic] + list(relative_topic))
 
     def __publish_status(self, status: str) -> None:
         if status == self.__published_status:
             return
 
-        _LOGGER.info('Publish status {!r}'.format(status))
+        _LOGGER.info("Publish status {!r}".format(status))
         self.publish_single(self.__status_topic, status, retain=True)
 
         self.__published_status = status
 
     def publish_online_status(self) -> None:
-        self.__publish_status('online')
+        self.__publish_status("online")
 
     def publish_offline_status(self) -> None:
-        self.__publish_status('offline')
+        self.__publish_status("offline")
 
 
 class LevelFilter(logging.Filter):
@@ -191,38 +209,44 @@ def configure_logging(debug_logging: bool) -> None:
     stdout_handler.setLevel(logging.INFO)
 
     logging.basicConfig(
-        format='%(message)s',
+        format="%(message)s",
         level=logging.DEBUG if debug_logging else logging.INFO,
-        handlers=[stdout_handler, stderr_handler]
+        handlers=[stdout_handler, stderr_handler],
     )
 
 
 def get_disks():
-    workdir = os.path.dirname(os.path.realpath(__file__))
-
-    os.system(
-        r'/usr/sbin/hdsentinel -solid -xml -r {0}/hdsentinel_output.xml'.format(workdir))
-    # stdout = check_output(["/usr/sbin/hdsentinel", "-xml", "-r", "hdsentinel_output.xml"], encoding='UTF-8')
-    _LOGGER.info('Generate xml with hdsentinel...')
+    hdsentinel_output = os.getenv(
+        "HDSENTINEL_XML_PATH", BASE_DIR.joinpath("hdsentinel_output.xml")
+    )
+    if "HDSENTINEL_XML_PATH" not in os.environ:
+        _LOGGER.info("Generate xml with hdsentinel...")
+        os.system(f"/usr/sbin/hdsentinel -solid -xml -r {hdsentinel_output}")
+        # stdout = check_output(["/usr/sbin/hdsentinel", "-xml", "-r", "hdsentinel_output.xml"], encoding='UTF-8')
+    else:
+        _LOGGER.debug(f"hdsentinel_output: {hdsentinel_output}")
 
     hdsentinel_disk = {}
-    hdsentinel_xml = ET.parse(r'{0}/hdsentinel_output.xml'.format(workdir))
+    _LOGGER.info("Parsing xml with hdsentinel...")
+    hdsentinel_xml = ET.parse(hdsentinel_output)
     for disk_summary in hdsentinel_xml.findall(".//Hard_Disk_Summary"):
-        disk_summary_str = ET.tostring(disk_summary, method='xml')
-        disk_summary_str = disk_summary_str.replace(WINDOWS_LINE_ENDING, b'')
-        disk_summary_str = disk_summary_str.replace(UNIX_LINE_ENDING, b'')
+        disk_summary_str = ET.tostring(disk_summary, method="xml")
+        disk_summary_str = disk_summary_str.replace(WINDOWS_LINE_ENDING, b"")
+        disk_summary_str = disk_summary_str.replace(UNIX_LINE_ENDING, b"")
         disk_summary_dic = xmltodict.parse(disk_summary_str)
-        hdsentinel_disk[disk_summary_dic['Hard_Disk_Summary']
-                        ['Hard_Disk_Serial_Number']] = disk_summary_dic['Hard_Disk_Summary']
+        hdsentinel_disk[
+            disk_summary_dic["Hard_Disk_Summary"]["Hard_Disk_Serial_Number"]
+        ] = disk_summary_dic["Hard_Disk_Summary"]
 
     return hdsentinel_disk
 
 
 def to_snake_case(name):
-    return '_'.join(
-        re.sub('([A-Z][a-z]+)', r' \1',
-               re.sub('([A-Z]+)', r' \1',
-                      name.replace('-', ' '))).split()).lower()
+    return "_".join(
+        re.sub(
+            "([A-Z][a-z]+)", r" \1", re.sub("([A-Z]+)", r" \1", name.replace("-", " "))
+        ).split()
+    ).lower()
 
 
 def check_if_number(value, value_type):
@@ -233,7 +257,7 @@ def check_if_number(value, value_type):
 
 
 def to_number(value):
-    number_values = re.findall(r'\d+', value)
+    number_values = re.findall(r"\d+", value)
     return number_values[0]
 
 
@@ -247,57 +271,68 @@ def isfloat(value):
 
 def main():
     global exiting_main_loop, update_interval
+    # load_dotenv()
 
-    debug_logging = os.getenv('DEBUG', '0') == '1'
-    use_debugpy = os.getenv('USE_DEBUGPY', '0') == '1'
-    debugpy_port = os.getenv('DEBUGPY_PORT', 5678)
-    mqtt_port = int(os.getenv('MQTT_PORT', 1883))
-    mqtt_host = os.getenv('MQTT_HOST')
-    mqtt_user = os.getenv('MQTT_USER')
-    mqtt_password = os.getenv('MQTT_PASSWORD')
+    debug_logging = os.getenv("DEBUG", "0") == "1"
+    use_debugpy = os.getenv("USE_DEBUGPY", "0") == "1"
+    debugpy_port = os.getenv("DEBUGPY_PORT", 5678)
+    mqtt_port = int(os.getenv("MQTT_PORT", 1883))
+    mqtt_host = os.getenv("MQTT_HOST")
+    mqtt_user = os.getenv("MQTT_USER")
+    mqtt_password = os.getenv("MQTT_PASSWORD")
 
-    mqtt_auth = {'username': mqtt_user,
-                 'password': mqtt_password} if mqtt_user and mqtt_password else None
+    mqtt_auth = (
+        {"username": mqtt_user, "password": mqtt_password}
+        if mqtt_user and mqtt_password
+        else None
+    )
 
-    update_interval = int(os.getenv('HDSENTINEL_INTERVAL', update_interval))
+    update_interval = int(os.getenv("HDSENTINEL_INTERVAL", update_interval))
 
-    _LOGGER.info('Configure logging...')
+    _LOGGER.info("Configure logging...")
     configure_logging(debug_logging)
 
-    _LOGGER.info('Get initial data from hdsentinel...')
+    _LOGGER.info("Get initial data from hdsentinel...")
     disks = get_disks()
 
     configs = {}
 
     for disk_serial_number, values in disks.items():
-        _LOGGER.info(
-            f"key: {disk_serial_number}, value: {disks[disk_serial_number]}")
-        alias = to_snake_case(values['Hard_Disk_Model_ID'])
-        _LOGGER.info('Get initial data from hdsentinel... {}'.format(alias))
+        _LOGGER.info(f"key: {disk_serial_number}, value: {disks[disk_serial_number]}")
+        alias = to_snake_case(values["Hard_Disk_Model_ID"])
+        _LOGGER.info(f"Get initial data from hdsentinel... {alias}")
         mqtt_client = HaCapableMqttClient(
-            '{}/{}'.format(MQTT_TOPIC, alias),
+            f"{MQTT_TOPIC}/{alias}",
             broker_host=mqtt_host,
             broker_port=mqtt_port,
-            broker_auth=mqtt_auth
+            broker_auth=mqtt_auth,
         )
 
-        mqtt_topic = mqtt_client.get_abs_topic('hdsentinel')
-        config = Config(disk_serial_number, alias, values['Hard_Disk_Model_ID'],
-                        values['Firmware_Revision'], mqtt_topic, mqtt_client.status_topic)
+        mqtt_topic = mqtt_client.get_abs_topic("hdsentinel")
+        config = Config(
+            disk_serial_number,
+            alias,
+            values["Hard_Disk_Model_ID"],
+            values["Firmware_Revision"],
+            mqtt_topic,
+            mqtt_client.status_topic,
+        )
         _LOGGER.info(
-            'Configuring Home Assistant via MQTT Discovery... {}:{}-{}'.format(mqtt_host, mqtt_port, alias))
+            f"Configuring Home Assistant via MQTT Discovery... {mqtt_host}:{mqtt_port}-{alias}"
+        )
 
         discovery_msgs = [
             {
-                'topic': sensor.topic,
-                'payload': json.dumps(sensor.payload, sort_keys=True),
-                'retain': True,
+                "topic": sensor.topic,
+                "payload": json.dumps(sensor.payload, sort_keys=True),
+                "retain": True,
             }
             for sensor in config.sensors
         ]
 
         _LOGGER.info(
-            'Publish sensor list to Home Assistant: {!r}'.format(discovery_msgs))
+            "Publish sensor list to Home Assistant: {!r}".format(discovery_msgs)
+        )
         mqtt_client.publish_multiple(discovery_msgs)
         configs[alias] = config
 
@@ -310,15 +345,15 @@ def main():
             disks = get_disks()
 
             for disk_serial_number, values in disks.items():
-                alias = to_snake_case(values['Hard_Disk_Model_ID'])
+                alias = to_snake_case(values["Hard_Disk_Model_ID"])
 
                 mqtt_client = HaCapableMqttClient(
-                    '{}/{}'.format(MQTT_TOPIC, alias),
+                    f"{MQTT_TOPIC}/{alias}",
                     broker_host=mqtt_host,
                     broker_port=mqtt_port,
-                    broker_auth=mqtt_auth
+                    broker_auth=mqtt_auth,
                 )
-                mqtt_topic = mqtt_client.get_abs_topic('hdsentinel')
+                mqtt_topic = mqtt_client.get_abs_topic("hdsentinel")
                 config = configs[alias]
 
                 main_loop(mqtt_client, mqtt_topic, config, values)
@@ -336,17 +371,19 @@ def main():
 def stop_main_loop(*args) -> None:
     global exiting_main_loop
     exiting_main_loop = True
-    _LOGGER.info('Exiting main loop...')
+    _LOGGER.info("Exiting main loop...")
 
 
-def main_loop(mqtt_client: HaCapableMqttClient, mqtt_topic: str, config: Config, values: any) -> None:
+def main_loop(
+    mqtt_client: HaCapableMqttClient, mqtt_topic: str, config: Config, values: any
+) -> None:
     status = {
-        key: config.value_types.get(key, VALUE_TYPES[DEFAULT_TYPE_NAME])(check_if_number(
-            value, config.value_types.get(key, VALUE_TYPES[DEFAULT_TYPE_NAME])))
-        for key, value in [
-            (key.lower(), value)
-            for key, value in values.items()
-        ]
+        key: config.value_types.get(key, VALUE_TYPES[DEFAULT_TYPE_NAME])(
+            check_if_number(
+                value, config.value_types.get(key, VALUE_TYPES[DEFAULT_TYPE_NAME])
+            )
+        )
+        for key, value in [(key.lower(), value) for key, value in values.items()]
     }
 
     status_string = json.dumps(status, sort_keys=True)
@@ -356,5 +393,5 @@ def main_loop(mqtt_client: HaCapableMqttClient, mqtt_topic: str, config: Config,
     mqtt_client.publish_online_status()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
