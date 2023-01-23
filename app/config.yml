@@ -30,6 +30,9 @@ sensor:
     entity_category: diagnostic
     state_class: measurement
     unit_of_measurement: 'mb'
+    value_template: |-
+      {% set total_size = value_json.total_size %}
+      {{ total_size.split()[0] | int(0) }}     
 
   current_temperature:
     _key: current_temperature
@@ -37,6 +40,9 @@ sensor:
     device_class: temperature
     state_class: measurement
     unit_of_measurement: '°C'
+    value_template: |-
+      {% set temperature = value_json.current_temperature %}
+      {{ temperature.split()[0] | int(0) }}     
 
   max_temp:
     _key: maximum_temperature_during_entire_lifespan
@@ -44,6 +50,9 @@ sensor:
     device_class: temperature
     state_class: measurement
     unit_of_measurement: '°C'
+    value_template: |-
+      {% set temperature = value_json.maximum_temperature_during_entire_lifespan %}
+      {{ temperature.split()[0] | int(0) }}    
 
   power_on_time:
     _key: power_on_time
@@ -52,6 +61,9 @@ sensor:
     state_class: measurement
     unit_of_measurement: 'days'
     icon: mdi:clock
+    value_template: |-
+      {% set days = value_json.power_on_time %}
+      {{ days.split()[0] | int(0) }}  
 
   estimated_lifetime:
     _key: estimated_remaining_lifetime
@@ -60,6 +72,9 @@ sensor:
     state_class: measurement
     unit_of_measurement: 'days'
     icon: mdi:clock-alert
+    value_template: |-
+      {% set days = value_json.estimated_remaining_lifetime.split('days')[0].split() %}
+      {{ days| last | int(0) }}    
 
   lifetime_writes:
     _key: lifetime_writes
@@ -68,12 +83,14 @@ sensor:
     state_class: measurement
     unit_of_measurement: 'tb'
     value_template: |-
-      {% set gb = value_json.lifetime_writes %}
-      {% if 'GB' in gb %}
-        {{ gb.split()[0] | float(0) | multiply(0.001) | round(2) }}
-      {% else %}
-        {{ gb.split()[0] | float(0) | round(2) }}
-      {% endif %}        
+      {% if 'lifetime_writes' in value_json %}
+        {% set gb = value_json.lifetime_writes %}
+        {% if 'GB' in gb %}
+          {{ gb.split()[0] | float(0) | multiply(0.001) | round(2) }}
+        {% else %}
+          {{ gb.split()[0] | float(0) | round(2) }}
+        {% endif %}
+      {% endif %}     
 
   health:
     _key: health
@@ -81,6 +98,10 @@ sensor:
     entity_category: diagnostic
     state_class: measurement
     unit_of_measurement: '%'
+    value_template: |-
+      {% set health = value_json.health %}
+      {{ health.split()[0] | int(0) }}
+    
 
   performance:
     _key: performance
@@ -88,6 +109,9 @@ sensor:
     entity_category: diagnostic
     state_class: measurement
     unit_of_measurement: '%'
+    value_template: |-
+      {% set performance = value_json.performance %}
+      {{ performance.split()[0] | int(0) }}    
 
   description:
     _key: description

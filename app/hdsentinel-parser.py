@@ -378,11 +378,7 @@ def main_loop(
     mqtt_client: HaCapableMqttClient, mqtt_topic: str, config: Config, values: any
 ) -> None:
     status = {
-        key: config.value_types.get(key, VALUE_TYPES[DEFAULT_TYPE_NAME])(
-            check_if_number(
-                value, config.value_types.get(key, VALUE_TYPES[DEFAULT_TYPE_NAME])
-            )
-        )
+        key: value
         for key, value in [(key.lower(), value) for key, value in values.items()]
     }
 
