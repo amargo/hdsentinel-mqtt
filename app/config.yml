@@ -67,6 +67,13 @@ sensor:
     entity_category: diagnostic
     state_class: measurement
     unit_of_measurement: 'tb'
+    value_template: |-
+      {% set gb = value_json.lifetime_writes %}
+      {% if 'GB' in gb %}
+        {{ gb.split()[0] | float(0) | multiply(0.001) | round(2) }}
+      {% else %}
+        {{ gb.split()[0] | float(0) | round(2) }}
+      {% endif %}        
 
   health:
     _key: health
