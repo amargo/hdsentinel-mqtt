@@ -6,21 +6,17 @@ Dockerized HDSentinel with MQTT.
 ## Usage
     ```
     ---
-    version: "3"
-    services:
-      hdsentinel-mqtt:
-        image: gszoboszlai/hdsentinel-mqtt-ha
-        container_name: hdsentinel-mqtt-ha
-        privileged: true
-        environment:
-          - PUID=1000
-          - PGID=1000
-          - TZ=Europe/Budapest
-          - MQTT_HOST=localhost
-          - MQTT_USER=mqtt_user
-          - MQTT_PASSWORD=mqtt_password
-          - HDSENTINEL_INTERVAL=600
-        volumes:
-          - /dev:/dev
-        restart: always
+    docker run -d \
+    --name hdsentinel-mqtt-ha \
+    --restart unless-stopped \
+    -e PUID=1000 \
+    -e PGID=1000 \
+    -e TZ=Europe/Budapest \
+    -e MQTT_HOST=ip \
+    -e MQTT_USER=user \
+    -e MQTT_PASSWORD=password \
+    -e HDSENTINEL_INTERVAL=600 \
+    -v /dev:/dev \
+    --privileged \
+    gerykapitany/hdsentinel-mqtt-ha        
     ```
