@@ -28,7 +28,10 @@ services:
       - MQTT_HOST=localhost
       - MQTT_USER=mqtt_user
       - MQTT_PASSWORD=mqtt_password
-      - HDSENTINEL_INTERVAL=600
+      - HDSENTINEL_XML_PATH=/app/hdsentinel_output.xml # Path to the HDSentinel XML output file
+      - HDSENTINEL_INTERVAL=600 # Interval in seconds between HDSentinel checks
+      - DEBUG=0 # Debug mode (0 = off, 1 = on)
     volumes:
       - /dev:/dev
+      - /srv/hdsentinel/hdsentinel_output.xml:/app/hdsentinel_output.xml
     restart: always
