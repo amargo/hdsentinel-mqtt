@@ -1,5 +1,5 @@
 #FROM alpine:3.15
-FROM python:3.10-alpine3.15
+FROM python:3.11-alpine3.15
 ARG HDSENTINEL_VERSION="019c"
 ARG GLIBC_VERSION=2.34-r0
 RUN \
