@@ -1,5 +1,5 @@
-FROM python:3.14.0a3-alpine3.20
-ARG HDSENTINEL_VERSION="019c"
+FROM python:3.11-alpine3.15
+ARG HDSENTINEL_VERSION="020c"
 ARG GLIBC_VERSION=2.34-r0
 RUN \
   apk add --no-cache ca-certificates util-linux && \
