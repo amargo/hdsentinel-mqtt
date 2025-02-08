@@ -1,33 +1,9 @@
 {
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:best-practices",
-    "config:base",
-    "group:allNonMajor",
-    "group:linters"
+    "config:recommended"
   ],
-  "pip_requirements": {
-    "fileMatch": [
-      "requirements.txt"
-    ],
-    "enabled": true
-  },
-  "github-actions": {
-    "enabled": true
-  },
   "packageRules": [
-    {
-      "description": "Auto PR and merge for vulnerability fixes",
-      "matchDepTypes": [
-        "dependencies"
-      ],
-      "matchUpdateTypes": [
-        "pin",
-        "digest",
-        "security"
-      ],
-      "automerge": true,
-      "groupName": "vulnerability-updates"
-    },
     {
       "description": "Auto PR for minor and patch updates",
       "matchUpdateTypes": [
@@ -46,8 +22,5 @@
     }
   ],
   "commitMessageAction": "Update dependencies",
-  "commitMessagePrefix": "chore(deps):",
-  "schedule": [
-    "every weekend"
-  ]
+  "commitMessagePrefix": "chore(deps):"
 }

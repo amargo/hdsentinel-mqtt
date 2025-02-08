@@ -1,4 +1,4 @@
-paho-mqtt
-xmltodict
+paho-mqtt>=2.1.0
+xmltodict>=0.14.2
 et
 pyyaml>=3.11
