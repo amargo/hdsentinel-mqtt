@@ -1,4 +1,4 @@
-FROM python:3.11-alpine3.15
+FROM python:alpine
 ARG HDSENTINEL_VERSION="020c"
 ARG GLIBC_VERSION=2.34-r0
 RUN \
