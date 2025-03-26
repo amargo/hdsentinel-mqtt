@@ -52,5 +52,6 @@ jobs:
       - name: Verify Docker image
         if: ${{ github.event_name != 'pull_request' }}
         run: |
-          docker pull ${{ steps.meta.outputs.tags[0] }}
-          docker inspect ${{ steps.meta.outputs.tags[0] }}
+          TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          docker pull $TAG
+          docker inspect $TAG
