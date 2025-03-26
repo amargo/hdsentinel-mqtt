@@ -1,19 +1,21 @@
 # hdsentinel-mqtt
 
-Dockerized HDSentinel with MQTT.
+Dockerized HDSentinel with MQTT
 
-- [Home Assistant](https://www.home-assistant.io/) integration with auto-discovery (compatible with version 2021.11+)
+- [Home Assistant](https://www.home-assistant.io/) integration via auto-discovery (compatible with version 2021.11+)
 
 ## Summary
 
-This project provides a Dockerized version of HDSentinel that publishes hard disk health and status information to an MQTT broker. It is designed to integrate seamlessly with Home Assistant, allowing for easy monitoring and alerting based on the health of your hard disks.
+This project provides a Dockerized version of HDSentinel that publishes hard disk health and status information to an MQTT broker. It is designed to integrate seamlessly with Home Assistant, enabling easy monitoring and alerting based on your hard disk's health.
 
 The main components of this project are:
-- `hdsentinel-parser.py`: A Python script that parses HDSentinel XML output and publishes the data to an MQTT broker.
-- `config.yml`: A configuration file that defines the sensors and their attributes.
-- Dockerfile: A Dockerfile that builds the Docker image with all necessary dependencies.
+- **hdsentinel-parser.py**: A Python script that parses the HDSentinel XML output and publishes the data to an MQTT broker.
+- **config.yml**: A configuration file that defines the sensors and their attributes.
+- **Dockerfile**: A Dockerfile that builds the Docker image with all necessary dependencies.
 
 ## Usage
+
+You can run the Docker image using the following Docker Compose configuration:
 
 ```yaml
 services:
@@ -28,9 +30,9 @@ services:
       - MQTT_HOST=localhost
       - MQTT_USER=mqtt_user
       - MQTT_PASSWORD=mqtt_password
-      - HDSENTINEL_XML_PATH=/app/hdsentinel_output.xml # Path to the HDSentinel XML output file
-      - HDSENTINEL_INTERVAL=600 # Interval in seconds between HDSentinel checks
-      - DEBUG=0 # Debug mode (0 = off, 1 = on)
+      - HDSENTINEL_XML_PATH=/app/hdsentinel_output.xml  # Path to the HDSentinel XML output file
+      - HDSENTINEL_INTERVAL=600                         # Interval in seconds between HDSentinel checks
+      - DEBUG=0                                         # Debug mode (0 = off, 1 = on)
     volumes:
       - /dev:/dev
       - /srv/hdsentinel/hdsentinel_output.xml:/app/hdsentinel_output.xml
