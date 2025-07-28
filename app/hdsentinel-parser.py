@@ -8,15 +8,12 @@ import sys
 import time
 import paho.mqtt.publish as publish
 import xml.etree.ElementTree as ET
-
+import subprocess
+from typing import Any, Dict, List, NamedTuple, Optional, Union, Tuple
 
 from math import ceil
-from subprocess import check_output
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional
 from yaml import safe_load
-
-# from dotenv import load_dotenv
 
 # replacement strings
 WINDOWS_LINE_ENDING = b"\r\n"
@@ -30,7 +27,7 @@ VALUE_TYPES = {
 }
 
 SensorConfig = NamedTuple(
-    "SensorConfig", [("topic", str), ("payload", Dict["str", Any])]
+    "SensorConfig", [("topic", str), ("payload", Dict[str, Any])]
 )
 
 __FILE = Path(__file__)
@@ -38,7 +35,8 @@ _LOGGER = logging.getLogger(__FILE.name)
 BASE_DIR = __FILE.parent
 
 MQTT_CLIENT_ID = __FILE.name
-MQTT_TOPIC = "hdsentinel"
+# Define the command used to run this script (used for documentation/reference)
+SCRIPT_ENTRYPOINT = ["python", "app/hdsentinel-parser.py"]
 
 update_interval = 600
 exiting_main_loop = False
@@ -141,52 +139,111 @@ class Config:
 
 
 class MqttClient:
+    """MQTT client for publishing messages."""
+    
     def __init__(
-        self, broker_host: str, broker_port: int, broker_auth: Optional[dict] = None
+        self, broker_host: str, broker_port: int, broker_auth: Optional[dict] = None,
+        use_tls: bool = False
     ):
+        """Initialize MQTT client.
+        
+        Args:
+            broker_host (str): MQTT broker hostname
+            broker_port (int): MQTT broker port
+            broker_auth (Optional[dict], optional): Authentication credentials. Defaults to None.
+            use_tls (bool, optional): Whether to use TLS. Defaults to False.
+        """
         self.__connection_options = {
             "hostname": broker_host,
             "port": broker_port,
             "auth": broker_auth,
             "client_id": MQTT_CLIENT_ID,
         }
+        
+        if use_tls:
+            self.__connection_options["tls"] = {}
 
     def publish_multiple(self, payloads: List[Dict[str, Any]], **kwargs) -> None:
-        publish.multiple(payloads, **self.__connection_options, **kwargs)
+        """Publish multiple messages.
+        
+        Args:
+            payloads (List[Dict[str, Any]]): List of payloads to publish
+        """
+        try:
+            publish.multiple(payloads, **self.__connection_options, **kwargs)
+        except Exception as e:
+            _LOGGER.error(f"Failed to publish multiple messages: {e}")
 
     def publish_single(self, topic: str, payload: str, **kwargs) -> None:
-        publish.single(topic, payload, **self.__connection_options, **kwargs)
+        """Publish a single message.
+        
+        Args:
+            topic (str): Topic to publish to
+            payload (str): Payload to publish
+        """
+        try:
+            publish.single(topic, payload, **self.__connection_options, **kwargs)
+        except Exception as e:
+            _LOGGER.error(f"Failed to publish message to {topic}: {e}")
 
 
 class HaCapableMqttClient(MqttClient):
+    """MQTT client with Home Assistant capabilities."""
+    
     def __init__(self, base_topic: str, **kwargs):
+        """Initialize Home Assistant capable MQTT client.
+        
+        Args:
+            base_topic (str): Base topic
+        """
         self.__base_topic = base_topic
         self.__status_topic = self.get_abs_topic("availability")
-
         self.__published_status = None
 
         super().__init__(**kwargs)
 
     @property
     def status_topic(self) -> str:
+        """Get status topic.
+        
+        Returns:
+            str: Status topic
+        """
         return self.__status_topic
 
     def get_abs_topic(self, *relative_topic: str) -> str:
+        """Get absolute topic.
+        
+        Args:
+            *relative_topic (str): Relative topic parts
+            
+        Returns:
+            str: Absolute topic
+        """
         return "/".join([self.__base_topic] + list(relative_topic))
 
     def __publish_status(self, status: str) -> None:
+        """Publish status.
+        
+        Args:
+            status (str): Status to publish
+        """
         if status == self.__published_status:
             return
 
-        _LOGGER.info("Publish status {!r}".format(status))
-        self.publish_single(self.__status_topic, status, retain=True)
-
-        self.__published_status = status
+        _LOGGER.info(f"Publishing status: {status}")
+        try:
+            self.publish_single(self.__status_topic, status, retain=True)
+            self.__published_status = status
+        except Exception as e:
+            _LOGGER.error(f"Failed to publish status {status}: {e}")
 
     def publish_online_status(self) -> None:
+        """Publish online status."""
         self.__publish_status("online")
 
     def publish_offline_status(self) -> None:
+        """Publish offline status."""
         self.__publish_status("offline")
 
 
@@ -215,33 +272,66 @@ def configure_logging(debug_logging: bool) -> None:
     )
 
 
-def get_disks():
+def get_disks() -> Dict[str, Dict[str, Any]]:
+    """Get disk information from HDSentinel.
+    
+    Returns:
+        Dict[str, Dict[str, Any]]: Dictionary of disk information, keyed by serial number
+    """
     hdsentinel_output = os.getenv(
         "HDSENTINEL_XML_PATH", BASE_DIR.joinpath("hdsentinel_output.xml")
     )
+    
     if "HDSENTINEL_XML_PATH" not in os.environ:
         _LOGGER.info("Generate xml with hdsentinel...")
-        os.system(f"/usr/sbin/hdsentinel -solid -xml -r {hdsentinel_output}")
-        # stdout = check_output(["/usr/sbin/hdsentinel", "-xml", "-r", "hdsentinel_output.xml"], encoding='UTF-8')
+        try:
+            subprocess.run(
+                ["/usr/sbin/hdsentinel", "-solid", "-xml", "-r", str(hdsentinel_output)],
+                check=True, capture_output=True
+            )
+        except subprocess.CalledProcessError as e:
+            _LOGGER.error(f"Failed to run HDSentinel: {e}")
+            return {}
     else:
         _LOGGER.debug(f"hdsentinel_output: {hdsentinel_output}")
 
     hdsentinel_disk = {}
     _LOGGER.info("Parsing xml with hdsentinel...")
-    hdsentinel_xml = ET.parse(hdsentinel_output)
-    for disk_summary in hdsentinel_xml.findall(".//Hard_Disk_Summary"):
-        disk_summary_str = ET.tostring(disk_summary, method="xml")
-        disk_summary_str = disk_summary_str.replace(WINDOWS_LINE_ENDING, b"")
-        disk_summary_str = disk_summary_str.replace(UNIX_LINE_ENDING, b"")
-        disk_summary_dic = xmltodict.parse(disk_summary_str)
-        hdsentinel_disk[
-            disk_summary_dic["Hard_Disk_Summary"]["Hard_Disk_Serial_Number"]
-        ] = disk_summary_dic["Hard_Disk_Summary"]
+    
+    try:
+        hdsentinel_xml = ET.parse(hdsentinel_output)
+        
+        for disk_summary in hdsentinel_xml.findall(".//Hard_Disk_Summary"):
+            try:
+                disk_summary_str = ET.tostring(disk_summary, method="xml")
+                disk_summary_str = disk_summary_str.replace(WINDOWS_LINE_ENDING, b"")
+                disk_summary_str = disk_summary_str.replace(UNIX_LINE_ENDING, b"")
+                disk_summary_dic = xmltodict.parse(disk_summary_str)
+                
+                serial_number = disk_summary_dic["Hard_Disk_Summary"].get("Hard_Disk_Serial_Number")
+                if serial_number:
+                    hdsentinel_disk[serial_number] = disk_summary_dic["Hard_Disk_Summary"]
+                else:
+                    _LOGGER.warning("Found disk without serial number, skipping")
+            except Exception as e:
+                _LOGGER.error(f"Error processing disk summary: {e}")
+                continue
+    except (ET.ParseError, FileNotFoundError) as e:
+        _LOGGER.error(f"Failed to parse XML: {e}")
+        return {}
 
     return hdsentinel_disk
 
 
-def to_snake_case(name):
+def to_snake_case(name: str) -> str:
+    """Convert a string to snake_case.
+    
+    Args:
+        name (str): String to convert
+        
+    Returns:
+        str: Converted string in snake_case
+    """
     return "_".join(
         re.sub(
             "([A-Z][a-z]+)", r" \1", re.sub("([A-Z]+)", r" \1", name.replace("-", " "))
@@ -249,19 +339,44 @@ def to_snake_case(name):
     ).lower()
 
 
-def check_if_number(value, value_type):
+def check_if_number(value: str, value_type: type) -> Union[str, int, float]:
+    """Check if a value should be converted to a number based on its type.
+    
+    Args:
+        value (str): Value to check
+        value_type (type): Expected type of the value
+        
+    Returns:
+        Union[str, int, float]: Converted value if applicable, otherwise original value
+    """
     if value_type is int or value_type is float:
         return to_number(value)
     else:
         return value
 
 
-def to_number(value):
+def to_number(value: str) -> str:
+    """Extract the first number from a string.
+    
+    Args:
+        value (str): String containing numbers
+        
+    Returns:
+        str: First number found in the string, or "0" if none found
+    """
     number_values = re.findall(r"\d+", value)
-    return number_values[0]
+    return number_values[0] if number_values else "0"
 
 
-def isfloat(value):
+def isfloat(value: str) -> bool:
+    """Check if a string can be converted to float.
+    
+    Args:
+        value (str): String to check
+        
+    Returns:
+        bool: True if string can be converted to float, False otherwise
+    """
     try:
         float(value)
         return True
@@ -269,17 +384,18 @@ def isfloat(value):
         return False
 
 
-def main():
+def main() -> None:
+    """Main function."""
     global exiting_main_loop, update_interval
-    # load_dotenv()
 
+    # Configure environment variables
     debug_logging = os.getenv("DEBUG", "0") == "1"
-    use_debugpy = os.getenv("USE_DEBUGPY", "0") == "1"
-    debugpy_port = os.getenv("DEBUGPY_PORT", 5678)
     mqtt_port = int(os.getenv("MQTT_PORT", 1883))
     mqtt_host = os.getenv("MQTT_HOST")
     mqtt_user = os.getenv("MQTT_USER")
     mqtt_password = os.getenv("MQTT_PASSWORD")
+    mqtt_use_tls = os.getenv("MQTT_USE_TLS", "0") == "1"
+    mqtt_topic = os.getenv("MQTT_TOPIC", "hdsentinel")  # Default topic prefix
 
     mqtt_auth = (
         {"username": mqtt_user, "password": mqtt_password}
@@ -292,49 +408,63 @@ def main():
     _LOGGER.info("Configure logging...")
     configure_logging(debug_logging)
 
+    if not mqtt_host:
+        _LOGGER.error("MQTT_HOST environment variable is not set. Exiting.")
+        sys.exit(1)
+
     _LOGGER.info("Get initial data from hdsentinel...")
     disks = get_disks()
+    
+    if not disks:
+        _LOGGER.error("No disks found or error getting disk data. Exiting.")
+        sys.exit(1)
 
     configs = {}
+    mqtt_clients = {}
 
     for disk_serial_number, values in disks.items():
-        _LOGGER.info(f"key: {disk_serial_number}, value: {disks[disk_serial_number]}")
-        alias = to_snake_case(values["Hard_Disk_Model_ID"])
-        _LOGGER.info(f"Get initial data from hdsentinel... {alias}")
-        mqtt_client = HaCapableMqttClient(
-            f"{MQTT_TOPIC}/{alias}",
-            broker_host=mqtt_host,
-            broker_port=mqtt_port,
-            broker_auth=mqtt_auth,
-        )
+        try:
+            _LOGGER.info(f"Processing disk: {disk_serial_number}")
+            alias = to_snake_case(values.get("Hard_Disk_Model_ID", f"unknown_{disk_serial_number}"))
+            _LOGGER.info(f"Using alias: {alias}")
+            
+            mqtt_client = HaCapableMqttClient(
+                f"{mqtt_topic}/{alias}",
+                broker_host=mqtt_host,
+                broker_port=mqtt_port,
+                broker_auth=mqtt_auth,
+                use_tls=mqtt_use_tls
+            )
+            mqtt_clients[alias] = mqtt_client
 
-        mqtt_topic = mqtt_client.get_abs_topic("hdsentinel")
-        config = Config(
-            disk_serial_number,
-            alias,
-            values["Hard_Disk_Model_ID"],
-            values["Firmware_Revision"],
-            mqtt_topic,
-            mqtt_client.status_topic,
-        )
-        _LOGGER.info(
-            f"Configuring Home Assistant via MQTT Discovery... {mqtt_host}:{mqtt_port}-{alias}"
-        )
+            disk_state_topic = mqtt_client.get_abs_topic("hdsentinel")
+            config = Config(
+                disk_serial_number,
+                alias,
+                values.get("Hard_Disk_Model_ID", "Unknown"),
+                values.get("Firmware_Revision", "Unknown"),
+                disk_state_topic,
+                mqtt_client.status_topic,
+            )
+            _LOGGER.info(
+                f"Configuring Home Assistant via MQTT Discovery... {mqtt_host}:{mqtt_port}-{alias}"
+            )
 
-        discovery_msgs = [
-            {
-                "topic": sensor.topic,
-                "payload": json.dumps(sensor.payload, sort_keys=True),
-                "retain": True,
-            }
-            for sensor in config.sensors
-        ]
+            discovery_msgs = [
+                {
+                    "topic": sensor.topic,
+                    "payload": json.dumps(sensor.payload, sort_keys=True),
+                    "retain": True,
+                }
+                for sensor in config.sensors
+            ]
 
-        _LOGGER.info(
-            "Publish sensor list to Home Assistant: {!r}".format(discovery_msgs)
-        )
-        mqtt_client.publish_multiple(discovery_msgs)
-        configs[alias] = config
+            _LOGGER.info(f"Publishing {len(discovery_msgs)} sensors for {alias}")
+            mqtt_client.publish_multiple(discovery_msgs)
+            configs[alias] = config
+        except Exception as e:
+            _LOGGER.error(f"Error setting up disk {disk_serial_number}: {e}")
+            continue
 
     signal.signal(signal.SIGINT, stop_main_loop)
     signal.signal(signal.SIGTERM, stop_main_loop)
@@ -342,30 +472,58 @@ def main():
     exiting_main_loop = False
     try:
         while True:
-            disks = get_disks()
+            try:
+                disks = get_disks()
+                
+                for disk_serial_number, values in disks.items():
+                    try:
+                        alias = to_snake_case(values.get("Hard_Disk_Model_ID", f"unknown_{disk_serial_number}"))
+                        
+                        # Skip disks that weren't in the initial configuration
+                        if alias not in configs:
+                            _LOGGER.warning(f"Skipping new disk {alias} that wasn't in initial configuration")
+                            continue
+                        
+                        mqtt_client = mqtt_clients.get(alias)
+                        if not mqtt_client:
+                            _LOGGER.warning(f"No MQTT client for {alias}, creating new one")
+                            mqtt_client = HaCapableMqttClient(
+                                f"{mqtt_topic}/{alias}",
+                                broker_host=mqtt_host,
+                                broker_port=mqtt_port,
+                                broker_auth=mqtt_auth,
+                                use_tls=mqtt_use_tls
+                            )
+                            mqtt_clients[alias] = mqtt_client
+                            
+                        disk_state_topic = mqtt_client.get_abs_topic("hdsentinel")
+                        config = configs[alias]
 
-            for disk_serial_number, values in disks.items():
-                alias = to_snake_case(values["Hard_Disk_Model_ID"])
+                        main_loop(mqtt_client, disk_state_topic, config, values)
+                    except Exception as e:
+                        _LOGGER.error(f"Error processing disk {disk_serial_number}: {e}")
+                        continue
+            except Exception as e:
+                _LOGGER.error(f"Error in main loop: {e}")
 
-                mqtt_client = HaCapableMqttClient(
-                    f"{MQTT_TOPIC}/{alias}",
-                    broker_host=mqtt_host,
-                    broker_port=mqtt_port,
-                    broker_auth=mqtt_auth,
-                )
-                mqtt_topic = mqtt_client.get_abs_topic("hdsentinel")
-                config = configs[alias]
-
-                main_loop(mqtt_client, mqtt_topic, config, values)
-
+            # Sleep with interruption support
             for _ in range(update_interval * 2):
                 time.sleep(0.5)
 
                 if exiting_main_loop:
-                    exit(0)
+                    _LOGGER.info("Exiting main loop due to signal")
+                    sys.exit(0)
 
+    except Exception as e:
+        _LOGGER.error(f"Unexpected error in main loop: {e}")
     finally:
-        mqtt_client.publish_offline_status()
+        # Publish offline status for all clients
+        for alias, client in mqtt_clients.items():
+            try:
+                _LOGGER.info(f"Publishing offline status for {alias}")
+                client.publish_offline_status()
+            except Exception as e:
+                _LOGGER.error(f"Error publishing offline status for {alias}: {e}")
 
 
 def stop_main_loop(*args) -> None:
@@ -375,18 +533,30 @@ def stop_main_loop(*args) -> None:
 
 
 def main_loop(
-    mqtt_client: HaCapableMqttClient, mqtt_topic: str, config: Config, values: any
+    mqtt_client: HaCapableMqttClient, disk_state_topic: str, config: Config, values: Dict[str, Any]
 ) -> None:
+    """Main processing loop for a single disk.
+    
+    Args:
+        mqtt_client (HaCapableMqttClient): MQTT client
+        disk_state_topic (str): MQTT topic for disk state
+        config (Config): Configuration
+        values (Dict[str, Any]): Disk values
+    """
+    # Convert all keys to lowercase
     status = {
-        key: value
-        for key, value in [(key.lower(), value) for key, value in values.items()]
+        key.lower(): value
+        for key, value in values.items()
     }
 
-    status_string = json.dumps(status, sort_keys=True)
-    _LOGGER.debug(status_string)
+    try:
+        status_string = json.dumps(status, sort_keys=True)
+        _LOGGER.debug(f"Publishing status for {disk_state_topic}: {status_string[:100]}...")
 
-    mqtt_client.publish_single(mqtt_topic, status_string)
-    mqtt_client.publish_online_status()
+        mqtt_client.publish_single(disk_state_topic, status_string)
+        mqtt_client.publish_online_status()
+    except Exception as e:
+        _LOGGER.error(f"Error in main_loop: {e}")
 
 
 if __name__ == "__main__":
