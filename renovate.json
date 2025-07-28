@@ -1,26 +1,82 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    "config:best-practices",
+    ":ignoreModulesAndTests",
+    "group:monorepos",
+    "group:recommended",
+    ":pinDigestsDisabled",
+    "schedule:weekends",
+    "workarounds:all"
+  ],
+  "enabledManagers": [
+    "dockerfile",
+    "pip_requirements"
   ],
   "packageRules": [
     {
-      "description": "Auto PR for minor and patch updates",
-      "matchUpdateTypes": [
-        "minor",
-        "patch"
+      "matchDatasources": [
+        "docker"
       ],
-      "automerge": true,
-      "groupName": "all-minor-and-patch-updates"
+      "pinDigests": false
     },
     {
-      "description": "Group all major updates together",
+      "matchManagers": [
+        "dockerfile",
+        "devcontainer"
+      ],
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "groupName": "🐋 Docker minor updates",
+      "automerge": true,
+      "pinDigests": false
+    },
+    {
+      "matchManagers": [
+        "dockerfile",
+        "devcontainer"
+      ],
       "matchUpdateTypes": [
         "major"
       ],
-      "groupName": "all-major-updates"
+      "groupName": "🚢 Docker major updates",
+      "pinDigests": false
+    },
+    {
+      "matchManagers": [
+        "pip_requirements"
+      ],
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "automerge": true,
+      "groupName": "🐍 Python minor updates"
+    },
+    {
+      "matchManagers": [
+        "pip_requirements"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "groupName": "🐍 Python major updates",
+      "automerge": false
+    },
+    {
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "automerge": true,
+      "groupName": "🔖 Patch updates"
     }
   ],
-  "commitMessageAction": "Update dependencies",
-  "commitMessagePrefix": "chore(deps):"
+  "vulnerabilityAlerts": {
+    "labels": [
+      "security"
+    ],
+    "osvVulnerabilityAlerts": true,
+    "automerge": false
+  }
 }
