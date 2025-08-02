@@ -8,10 +8,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
+        uses: actions/checkout@v4
 
       - name: Run Renovate
-        uses: renovatebot/github-action@04c5c5c6bdc22714621d741d9a81022f702ee797 # v38.1.1
+        uses: renovatebot/github-action@v43.0.5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           configurationFile: renovate.json
