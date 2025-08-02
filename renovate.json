@@ -7,24 +7,27 @@
     "group:monorepos",
     "group:recommended",
     ":pinDigestsDisabled",
-    "schedule:weekends",
+
     "workarounds:all"
   ],
   "enabledManagers": [
     "dockerfile",
-    "pip_requirements"
+    "pip_requirements",
+    "github-actions"
   ],
   "packageRules": [
     {
       "matchDatasources": [
-        "docker"
+        "docker",
+        "github-actions"
       ],
       "pinDigests": false
     },
     {
       "matchManagers": [
         "dockerfile",
-        "devcontainer"
+        "devcontainer",
+        "github-actions"
       ],
       "matchUpdateTypes": [
         "minor"
@@ -36,7 +39,8 @@
     {
       "matchManagers": [
         "dockerfile",
-        "devcontainer"
+        "devcontainer",
+        "github-actions"
       ],
       "matchUpdateTypes": [
         "major"
@@ -63,6 +67,17 @@
       ],
       "groupName": "🐍 Python major updates",
       "automerge": false
+    },
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "automerge": true,
+      "groupName": "⚡ GitHub Actions updates"
     },
     {
       "matchUpdateTypes": [
