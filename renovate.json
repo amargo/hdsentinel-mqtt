@@ -18,7 +18,8 @@
   "packageRules": [
     {
       "matchDatasources": [
-        "docker"
+        "docker",
+        "github-actions"
       ],
       "pinDigests": false
     },
@@ -31,7 +32,8 @@
     {
       "matchManagers": [
         "dockerfile",
-        "devcontainer"
+        "devcontainer",
+        "github-actions"
       ],
       "matchUpdateTypes": [
         "minor"
@@ -43,7 +45,8 @@
     {
       "matchManagers": [
         "dockerfile",
-        "devcontainer"
+        "devcontainer",
+        "github-actions"
       ],
       "matchUpdateTypes": [
         "major"
