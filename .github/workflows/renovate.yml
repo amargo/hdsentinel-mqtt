@@ -2,7 +2,7 @@ name: Renovate
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * SUN"
+    - cron: "0 3 * * *"
 jobs:
   renovate:
     runs-on: ubuntu-latest
@@ -17,4 +17,4 @@ jobs:
           configurationFile: renovate.json
         env:
           LOG_LEVEL: debug
-          RENOVATE_REPOSITORIES: ${{ github.repository }}          
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
