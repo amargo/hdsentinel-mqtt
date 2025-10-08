@@ -1,4 +1,4 @@
-FROM python:3.13-alpine
+FROM python:3.14-alpine
 ARG HDSENTINEL_VERSION="020c"
 ENV HDSENTINEL_URL=https://www.hdsentinel.com/hdslin/hdsentinel-$HDSENTINEL_VERSION-x64.zip
 
