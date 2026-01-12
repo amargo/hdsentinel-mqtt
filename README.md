@@ -52,6 +52,56 @@ services:
     restart: always
 ```
 
+## HDSentinel XML generation modes
+
+This project can work in two different modes depending on whether `HDSENTINEL_XML_PATH` is set.
+
+- **Mode A: Container generates the XML (default)**
+  - **How it works**: If `HDSENTINEL_XML_PATH` is **not** set, the container runs HDSentinel internally and writes the XML to the default path (`/app/hdsentinel_output.xml`), then parses it.
+  - **When to use**: Works best when the container has reliable access to disk devices (for example with `privileged: true` and `/dev:/dev`).
+
+- **Mode B: Host generates the XML, container only reads/parses it**
+  - **How it works**: If `HDSENTINEL_XML_PATH` **is** set, the container will **not** run HDSentinel. It will only read and parse the XML file at the provided path.
+  - **When to use**: Recommended when disk / SMART access from inside the container is restricted or unreliable.
+
+### Important note for Proxmox (PVE) users
+
+When running on Proxmox (PVE), direct disk / SMART access from inside Docker containers can be unreliable or unavailable depending on how disks are passed through and what device permissions are available.
+
+In that case, **Mode B (host-generated XML)** is often the most reliable setup:
+
+#### Generate the XML on the Proxmox host
+
+Example using native HDSentinel on the Proxmox host:
+
+```bash
+/root/hdsentinel -solid -xml -r /srv/hdsentinel/hdsentinel_output.xml
+```
+
+Typical cron setup:
+
+```cron
+*/10 * * * * /root/hdsentinel -solid -xml -r /srv/hdsentinel/hdsentinel_output.xml
+```
+
+#### Ensure the XML file exists before starting the container
+
+If the host path does not exist, Docker may create it as a directory during bind-mounting, which will cause XML parsing errors.
+
+#### Bind-mount the pre-generated file into the container
+
+```yaml
+volumes:
+  - /srv/hdsentinel/hdsentinel_output.xml:/app/hdsentinel_output.xml
+```
+
+#### Summary
+
+- **Proxmox host**: generates `hdsentinel_output.xml`
+- **Container**: reads/parses the XML and publishes to MQTT
+
+This approach avoids disk access and permission issues inside containers on PVE systems.
+
 ## Environment Variables
 
 | Variable | Description | Required | Default |
