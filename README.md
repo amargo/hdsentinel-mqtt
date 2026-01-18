@@ -30,7 +30,7 @@ You can run the Docker image using the following Docker Compose configuration:
 ```yaml
 services:
   hdsentinel-mqtt:
-    image: gszoboszlai/hdsentinel-mqtt-ha
+    image: ghcr.io/amargo/hdsentinel-mqtt
     container_name: hdsentinel-mqtt-ha
     privileged: true
     environment:
