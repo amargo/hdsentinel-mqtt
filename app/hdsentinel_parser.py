@@ -134,6 +134,10 @@ class Config:
         return self.__sensors
 
     @property
+    def alias(self) -> str:
+        return self.__alias
+
+    @property
     def value_types(self) -> Dict[str, callable]:
         return self.__value_types
 
@@ -281,8 +285,8 @@ def get_disks() -> Dict[str, Dict[str, Any]]:
     hdsentinel_output = os.getenv(
         "HDSENTINEL_XML_PATH", BASE_DIR.joinpath("hdsentinel_output.xml")
     )
-    
-    if "HDSENTINEL_XML_PATH" not in os.environ:
+
+    if os.getenv("HDSENTINEL_XML_PATH") is None:
         _LOGGER.info("Generate xml with hdsentinel...")
         try:
             subprocess.run(
@@ -337,6 +341,16 @@ def to_snake_case(name: str) -> str:
             "([A-Z][a-z]+)", r" \1", re.sub("([A-Z]+)", r" \1", name.replace("-", " "))
         ).split()
     ).lower()
+
+
+def to_safe_id(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9]+", "_", (value or "")).strip("_").lower()
+
+
+def build_disk_alias(model_id: str, serial_number: str) -> str:
+    model_part = to_snake_case(model_id or "unknown")
+    serial_suffix = to_safe_id(serial_number) if serial_number else "unknown"
+    return f"{model_part}_{serial_suffix}"
 
 
 def check_if_number(value: str, value_type: type) -> Union[str, int, float]:
@@ -425,7 +439,10 @@ def main() -> None:
     for disk_serial_number, values in disks.items():
         try:
             _LOGGER.info(f"Processing disk: {disk_serial_number}")
-            alias = to_snake_case(values.get("Hard_Disk_Model_ID", f"unknown_{disk_serial_number}"))
+            alias = build_disk_alias(
+                values.get("Hard_Disk_Model_ID", f"unknown_{disk_serial_number}"),
+                disk_serial_number,
+            )
             _LOGGER.info(f"Using alias: {alias}")
             
             mqtt_client = HaCapableMqttClient(
@@ -435,7 +452,7 @@ def main() -> None:
                 broker_auth=mqtt_auth,
                 use_tls=mqtt_use_tls
             )
-            mqtt_clients[alias] = mqtt_client
+            mqtt_clients[disk_serial_number] = mqtt_client
 
             disk_state_topic = mqtt_client.get_abs_topic("hdsentinel")
             config = Config(
@@ -461,7 +478,7 @@ def main() -> None:
 
             _LOGGER.info(f"Publishing {len(discovery_msgs)} sensors for {alias}")
             mqtt_client.publish_multiple(discovery_msgs)
-            configs[alias] = config
+            configs[disk_serial_number] = config
         except Exception as e:
             _LOGGER.error(f"Error setting up disk {disk_serial_number}: {e}")
             continue
@@ -477,27 +494,30 @@ def main() -> None:
                 
                 for disk_serial_number, values in disks.items():
                     try:
-                        alias = to_snake_case(values.get("Hard_Disk_Model_ID", f"unknown_{disk_serial_number}"))
-                        
+                        config = configs.get(disk_serial_number)
+
                         # Skip disks that weren't in the initial configuration
-                        if alias not in configs:
-                            _LOGGER.warning(f"Skipping new disk {alias} that wasn't in initial configuration")
+                        if not config:
+                            _LOGGER.warning(
+                                f"Skipping new disk {disk_serial_number} that wasn't in initial configuration"
+                            )
                             continue
-                        
-                        mqtt_client = mqtt_clients.get(alias)
+
+                        mqtt_client = mqtt_clients.get(disk_serial_number)
                         if not mqtt_client:
-                            _LOGGER.warning(f"No MQTT client for {alias}, creating new one")
+                            _LOGGER.warning(
+                                f"No MQTT client for {disk_serial_number}, creating new one"
+                            )
                             mqtt_client = HaCapableMqttClient(
-                                f"{mqtt_topic}/{alias}",
+                                f"{mqtt_topic}/{config.alias}",
                                 broker_host=mqtt_host,
                                 broker_port=mqtt_port,
                                 broker_auth=mqtt_auth,
                                 use_tls=mqtt_use_tls
                             )
-                            mqtt_clients[alias] = mqtt_client
+                            mqtt_clients[disk_serial_number] = mqtt_client
                             
                         disk_state_topic = mqtt_client.get_abs_topic("hdsentinel")
-                        config = configs[alias]
 
                         main_loop(mqtt_client, disk_state_topic, config, values)
                     except Exception as e:
@@ -518,12 +538,12 @@ def main() -> None:
         _LOGGER.error(f"Unexpected error in main loop: {e}")
     finally:
         # Publish offline status for all clients
-        for alias, client in mqtt_clients.items():
+        for serial, client in mqtt_clients.items():
             try:
-                _LOGGER.info(f"Publishing offline status for {alias}")
+                _LOGGER.info(f"Publishing offline status for {serial}")
                 client.publish_offline_status()
             except Exception as e:
-                _LOGGER.error(f"Error publishing offline status for {alias}: {e}")
+                _LOGGER.error(f"Error publishing offline status for {serial}: {e}")
 
 
 def stop_main_loop(*args) -> None:
