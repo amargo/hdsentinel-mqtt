@@ -9,7 +9,7 @@ Dockerized HDSentinel with MQTT
 This project provides a Dockerized version of HDSentinel that publishes hard disk health and status information to an MQTT broker. It is designed to integrate seamlessly with Home Assistant, enabling easy monitoring and alerting based on your hard disk's health.
 
 The main components of this project are:
-- **hdsentinel-parser.py**: A Python script that parses the HDSentinel XML output and publishes the data to an MQTT broker.
+- **hdsentinel_parser.py**: A Python script that parses the HDSentinel XML output and publishes the data to an MQTT broker.
 - **config.yml**: A configuration file that defines the sensors and their attributes.
 - **Dockerfile**: A Dockerfile that builds the Docker image with all necessary dependencies.
 
@@ -18,6 +18,7 @@ The main components of this project are:
 - Monitors hard disk health metrics including temperature, health percentage, and performance
 - Publishes data to MQTT with configurable topics
 - Supports Home Assistant MQTT auto-discovery
+- **Unique identification for identical disk models** - handles multiple disks with the same model name
 - Secure TLS connection to MQTT broker (optional)
 - Runs as a non-root user for improved security
 - Container health monitoring
@@ -201,6 +202,66 @@ HDSentinel provides various disk health metrics that are published to MQTT. Here
 
 Additional sensors may be available depending on what your specific disk model reports.
 
+## Handling Multiple Identical Disks
+
+### Problem: Duplicate Device Models
+
+When you have multiple hard drives with identical model names (e.g., multiple `SAMSUNG_HD103UJ` or `WDC_WD10EFRX-68FYTN0` drives), older versions of this project would create colliding MQTT topics and Home Assistant entities. This caused:
+
+- Only one device appearing in Home Assistant with incomplete/missing sensors
+- Device attributes (like `/dev/sdX`) appearing to "swap" between disks
+- Entity states being overwritten by different physical disks
+
+### Solution: Serial-Based Identification
+
+Starting from version **2.0.0**, the project uses a **stable, unique identifier** for each disk:
+
+- **Device identification**: Uses the disk's **serial number** (e.g., `S13PJ90S113060`) as the stable key
+- **Alias generation**: Combines model name + the full serial number (sanitized for MQTT/HA)
+  - Example: `samsung_hd103uj_s13pj90s113060` and `samsung_hd103uj_s13pj90s113054`
+- **MQTT topics**: Each disk gets unique topics like:
+  - `hdsentinel/samsung_hd103uj_s13pj90s113060/hdsentinel`
+  - `hdsentinel/samsung_hd103uj_s13pj90s113054/hdsentinel`
+- **Home Assistant entities**: Each disk appears as a separate device with unique entity IDs
+
+### Benefits
+
+**Stable across reboots**: Even if Linux reassigns `/dev/sdb` ↔ `/dev/sdc`, entities remain correct  
+**No collisions**: Each disk has unique MQTT topics and HA device identifiers  
+**Clear identification**: Entity names include serial suffix for easy distinction
+
+### Migration from Older Versions
+
+**Breaking Change**: If you're upgrading from a version before 2.0.0 and have multiple identical disk models:
+
+1. **Backup your Home Assistant configuration** (optional but recommended)
+2. **Remove old MQTT devices** in Home Assistant:
+   - Go to **Settings** → **Devices & Services** → **MQTT**
+   - Find the old disk devices (they'll have generic names like `samsung_hd103uj`)
+   - Click on each device and select **Delete**
+3. **Restart the container**:
+   ```bash
+   docker restart hdsentinel-mqtt-ha
+   ```
+4. **New devices will appear** with unique names (e.g., `samsung_hd103uj_s13pj90s113060`)
+
+**Alternative**: Clear retained MQTT discovery topics on your broker:
+```bash
+# Example using mosquitto_pub
+mosquitto_pub -h localhost -t 'homeassistant/sensor/hdsentinel_samsung_hd103uj/#' -n -r -d
+```
+
+### Technical Details
+
+The implementation follows [Home Assistant MQTT Discovery best practices](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery):
+
+- **`unique_id`**: `hdsentinel_{serial_number}_{sensor_name}` (e.g., `hdsentinel_S13PJ90S113060_health`)
+- **Device `identifiers`**: `["hdsentinel_{serial_number}"]` (e.g., `["hdsentinel_S13PJ90S113060"]`)
+- **Device `name`**: `{model}_{serial_number}` (sanitized) (e.g., `samsung_hd103uj_s13pj90s113060`)
+- **State topics**: `hdsentinel/{alias}/hdsentinel`
+
+This ensures each physical disk is tracked independently, regardless of model name duplication or `/dev/sdX` enumeration changes.
+
 ## Troubleshooting
 
 ### Common Issues
@@ -219,6 +280,16 @@ Additional sensors may be available depending on what your specific disk model r
    - Verify Home Assistant MQTT integration is configured
    - Check if MQTT discovery is enabled in Home Assistant
    - Restart the container to republish discovery messages
+
+4. **Duplicate or conflicting entities (after upgrade)**
+   - Delete old MQTT devices in Home Assistant (see [Migration section](#migration-from-older-versions))
+   - Clear retained MQTT topics for old device names
+   - Restart the container to republish with new unique identifiers
+
+5. **Disk serial number not found**
+   - The script will log a warning and skip disks without serial numbers
+   - Ensure HDSentinel can read SMART data from your disks
+   - Check that the disk is properly connected and recognized by the system
 
 ### Debugging
 
