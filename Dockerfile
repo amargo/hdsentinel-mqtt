@@ -38,6 +38,6 @@ VOLUME /dev
 
 # Health check
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-  CMD pgrep -f "python hdsentinel-parser.py" || exit 1
+  CMD pgrep -f "python hdsentinel_parser.py" || exit 1
 
-ENTRYPOINT ["python", "hdsentinel-parser.py"]
+ENTRYPOINT ["python", "hdsentinel_parser.py"]
