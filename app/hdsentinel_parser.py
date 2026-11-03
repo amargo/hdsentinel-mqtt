@@ -520,10 +520,55 @@ def to_safe_id(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "_", (value or "")).strip("_").lower()
 
 
-def build_disk_alias(model_id: str, serial_number: str) -> str:
+def build_disk_alias(
+    model_id: str, serial_number: str, with_serial: bool = True
+) -> str:
+    """Alias used in MQTT topics. Model-only (legacy, stable) or model + serial."""
     model_part = to_snake_case(model_id or "unknown")
+    if not with_serial:
+        return model_part
     serial_suffix = to_safe_id(serial_number) if serial_number else "unknown"
     return f"{model_part}_{serial_suffix}"
+
+
+ALIAS_MODES = ("auto", "model", "serial")
+
+
+def resolve_aliases(
+    disks: Dict[str, Dict[str, Any]], mode: str = "auto"
+) -> Dict[str, str]:
+    """Map serial number -> alias.
+
+    auto   (default): model-only alias, serial suffix only for models that occur
+                      more than once, so existing Home Assistant topics stay stable.
+    model:            always model-only (identical models collide).
+    serial:           always model + serial.
+    """
+    if mode not in ALIAS_MODES:
+        _LOGGER.warning(f"Invalid HDSENTINEL_ALIAS_MODE={mode!r}, using auto")
+        mode = "auto"
+
+    models = {
+        serial: values.get("Hard_Disk_Model_ID") or f"unknown_{serial}"
+        for serial, values in disks.items()
+    }
+    plain = {
+        serial: build_disk_alias(model, serial, with_serial=False)
+        for serial, model in models.items()
+    }
+    counts: Dict[str, int] = {}
+    for alias in plain.values():
+        counts[alias] = counts.get(alias, 0) + 1
+
+    aliases = {}
+    for serial, model in models.items():
+        if mode == "serial" or (mode == "auto" and counts[plain[serial]] > 1):
+            aliases[serial] = build_disk_alias(model, serial)
+        else:
+            aliases[serial] = plain[serial]
+    if mode == "model" and any(c > 1 for c in counts.values()):
+        _LOGGER.warning("Identical disk models share a topic in HDSENTINEL_ALIAS_MODE=model")
+    return aliases
 
 
 def check_if_number(value: str, value_type: type) -> Union[str, int, float]:
@@ -624,13 +669,12 @@ def main() -> None:
             client_id=f"{MQTT_CLIENT_ID}-{alias}"[:128],
         )
 
+    aliases = resolve_aliases(disks, os.getenv("HDSENTINEL_ALIAS_MODE", "auto"))
+
     for disk_serial_number, values in disks.items():
         try:
             _LOGGER.info(f"Processing disk: {disk_serial_number}")
-            alias = build_disk_alias(
-                values.get("Hard_Disk_Model_ID", f"unknown_{disk_serial_number}"),
-                disk_serial_number,
-            )
+            alias = aliases[disk_serial_number]
             _LOGGER.info(f"Using alias: {alias}")
 
             mqtt_client = make_client(alias)

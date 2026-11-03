@@ -161,6 +161,7 @@ This approach avoids disk access and permission issues inside containers on PVE 
 | `MQTT_NAME_PREFIX` | Display-name prefix (e.g. host name) for devices/entities. Does not change `unique_id`, topics or identifiers | No | - |
 | `MQTT_TOPIC` | Base topic for MQTT messages | No | `hdsentinel` |
 | `HDSENTINEL_XML_PATH` | Mode B: path of the host-generated XML (container does not run HDSentinel) | No | unset (Mode A, writes to `/tmp`) |
+| `HDSENTINEL_ALIAS_MODE` | Topic/device alias: `auto` = model only, plus serial suffix only for models that occur more than once; `model` = always model only; `serial` = always model + serial | No | `auto` |
 | `HDSENTINEL_INTERVAL` | Interval in seconds between checks (minimum 10) | No | `600` |
 | `HDSENTINEL_HEARTBEAT_FILE` | Healthcheck heartbeat file | No | `/tmp/hdsentinel.heartbeat` |
 | `DEBUG` | Enable debug logging (0 = off, 1 = on) | No | `0` |
@@ -266,7 +267,7 @@ When you have multiple hard drives with identical model names (e.g., multiple `S
 Starting from version **2.0.0**, the project uses a **stable, unique identifier** for each disk:
 
 - **Device identification**: Uses the disk's **serial number** (e.g., `S13PJ90S113060`) as the stable key
-- **Alias generation**: Combines model name + the full serial number (sanitized for MQTT/HA)
+- **Alias generation** (`HDSENTINEL_ALIAS_MODE=auto`, default): the model name only, so existing topics stay stable; models that occur more than once get the sanitized serial number appended
   - Example: `samsung_hd103uj_s13pj90s113060` and `samsung_hd103uj_s13pj90s113054`
 - **MQTT topics**: Each disk gets unique topics like:
   - `hdsentinel/samsung_hd103uj_s13pj90s113060/hdsentinel`
@@ -281,7 +282,7 @@ Starting from version **2.0.0**, the project uses a **stable, unique identifier*
 
 ### Migration from Older Versions
 
-**Breaking Change**: If you're upgrading from a version before 2.0.0 and have multiple identical disk models:
+**Breaking Change** only for setups with multiple identical disk models (single models keep their old topics in `auto` mode; use `HDSENTINEL_ALIAS_MODE=model` to force the legacy alias). If you're upgrading from a version before 2.0.0 and have multiple identical disk models:
 
 1. **Backup your Home Assistant configuration** (optional but recommended)
 2. **Remove old MQTT devices** in Home Assistant:

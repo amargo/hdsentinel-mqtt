@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.hdsentinel_parser import (
     get_disks, to_snake_case, to_safe_id, build_disk_alias, check_if_number, to_number, isfloat,
     MqttClient, HaCapableMqttClient, Config, main_loop,
-    env_int, read_secret, xml_age_seconds
+    env_int, read_secret, xml_age_seconds, resolve_aliases
 )
 
 
@@ -368,6 +368,33 @@ class TestHdSentinelParser(unittest.TestCase):
         self.assertEqual(payload["unique_id"], "hdsentinel_SER1_hard_disk_health")
         self.assertEqual(payload["device"]["identifiers"], ["hdsentinel_SER1"])
         self.assertEqual(config.sensors[0].topic, "homeassistant/sensor/hdsentinel_model_ser1/hard_disk_health/config")
+
+    def test_resolve_aliases_auto_keeps_legacy_model_only_topics(self):
+        disks = {
+            "S1": {"Hard_Disk_Model_ID": "WDC WD800HLFS"},
+            "S2": {"Hard_Disk_Model_ID": "TOSHIBA MG09ACA18TE"},
+        }
+        self.assertEqual(
+            resolve_aliases(disks, "auto"),
+            {"S1": "wdc_wd800_hlfs", "S2": "toshiba_mg09_aca18_te"},
+        )
+
+    def test_resolve_aliases_auto_suffixes_only_duplicate_models(self):
+        disks = {
+            "S13PJ90S113060": {"Hard_Disk_Model_ID": "SAMSUNG HD103UJ"},
+            "S13PJ90S113054": {"Hard_Disk_Model_ID": "SAMSUNG HD103UJ"},
+            "WD-1": {"Hard_Disk_Model_ID": "WDC WD10EFRX"},
+        }
+        aliases = resolve_aliases(disks, "auto")
+        self.assertEqual(aliases["S13PJ90S113060"], "samsung_hd103_uj_s13pj90s113060")
+        self.assertEqual(aliases["S13PJ90S113054"], "samsung_hd103_uj_s13pj90s113054")
+        self.assertEqual(aliases["WD-1"], "wdc_wd10_efrx")
+
+    def test_resolve_aliases_modes(self):
+        disks = {"S1": {"Hard_Disk_Model_ID": "WDC WD800HLFS"}}
+        self.assertEqual(resolve_aliases(disks, "serial")["S1"], "wdc_wd800_hlfs_s1")
+        self.assertEqual(resolve_aliases(disks, "model")["S1"], "wdc_wd800_hlfs")
+        self.assertEqual(resolve_aliases(disks, "bogus")["S1"], "wdc_wd800_hlfs")
 
     def test_duplicate_disk_models_unique_aliases(self):
         """Test that duplicate disk models get unique aliases based on serial numbers."""
