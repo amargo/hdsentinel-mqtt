@@ -70,8 +70,10 @@ secrets:
 The host writes the XML atomically (cron, every 10 minutes):
 
 ```cron
-*/10 * * * * /root/hdsentinel -solid -xml -r /srv/hdsentinel/hdsentinel_output.xml.tmp && mv /srv/hdsentinel/hdsentinel_output.xml.tmp /srv/hdsentinel/hdsentinel_output.xml
+*/10 * * * * /root/hdsentinel -solid -xml -r /srv/hdsentinel/hdsentinel_output.new.xml >/dev/null 2>&1 && mv -f /srv/hdsentinel/hdsentinel_output.new.xml /srv/hdsentinel/hdsentinel_output.xml
 ```
+
+> HDSentinel appends `.xml` to any `-r` file name that does not already end in `.xml`, so the temporary name must end in `.xml` (`...new.xml`, not `...xml.tmp`).
 
 If the XML is older than `2 x HDSENTINEL_INTERVAL + 60 s` (cron stopped), the disks are marked
 `offline` in Home Assistant instead of showing frozen values.

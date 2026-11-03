@@ -52,14 +52,22 @@
         "digest"
       ],
       "groupName": "📦 Non-major updates",
-      "automerge": true
+      "automerge": true,
+      "minimumReleaseAge": "7 days"
     },
     {
-      "description": "One PR for every major update across all managers (manual review)",
+      "description": "GitHub Actions (any update) and majors: one PR, manual review, never automerged",
       "matchUpdateTypes": [
         "major"
       ],
-      "groupName": "🚀 Major updates",
+      "groupName": "🔍 Review required: majors and GitHub Actions",
+      "automerge": false
+    },
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "🔍 Review required: majors and GitHub Actions",
       "automerge": false
     }
   ]

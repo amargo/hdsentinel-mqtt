@@ -2,8 +2,10 @@ import xmltodict
 import json
 import logging
 import os
+import atexit
 import signal
 import re
+import shutil
 import ssl
 import sys
 import tempfile
@@ -187,6 +189,7 @@ class MqttClient:
         """
         self.__host = broker_host
         self.__port = broker_port
+        self.__client_id = client_id
         self.__last_info = None
 
         self.__client = mqtt.Client(
@@ -221,7 +224,9 @@ class MqttClient:
         if reason_code.is_failure:
             _LOGGER.error(f"MQTT connect failed: {reason_code}")
             return
-        _LOGGER.info(f"MQTT connected to {self.__host}:{self.__port}")
+        _LOGGER.info(
+            f"MQTT connected to {self.__host}:{self.__port} as {self.__client_id}"
+        )
         try:
             self._on_connected()
         except Exception as e:
@@ -377,17 +382,29 @@ def configure_logging(debug_logging: bool) -> None:
     )
 
 
+_mode_a_dir: Optional[Path] = None
+
+
+def mode_a_output_path() -> Path:
+    """Private (0700, per-process) output location for Mode A.
+
+    Avoids a fixed, predictable file name in a shared temp dir (symlink attacks)
+    while keeping the root filesystem read-only (tmpfs /tmp).
+    """
+    global _mode_a_dir
+    if _mode_a_dir is None:
+        _mode_a_dir = Path(tempfile.mkdtemp(prefix="hdsentinel-"))
+        atexit.register(shutil.rmtree, _mode_a_dir, ignore_errors=True)
+    return _mode_a_dir.joinpath("hdsentinel_output.xml")
+
+
 def get_disks() -> Dict[str, Dict[str, Any]]:
     """Get disk information from HDSentinel.
     
     Returns:
         Dict[str, Dict[str, Any]]: Dictionary of disk information, keyed by serial number
     """
-    # Mode A writes into the temp dir so the root filesystem can be read-only.
-    hdsentinel_output = os.getenv(
-        "HDSENTINEL_XML_PATH",
-        Path(tempfile.gettempdir()).joinpath("hdsentinel_output.xml"),
-    )
+    hdsentinel_output = os.getenv("HDSENTINEL_XML_PATH") or mode_a_output_path()
 
     if os.getenv("HDSENTINEL_XML_PATH") is None:
         _LOGGER.info("Generate xml with hdsentinel...")
@@ -475,6 +492,9 @@ def read_secret(name: str) -> Optional[str]:
 def touch_heartbeat() -> None:
     """Mark the main loop as alive for the container healthcheck."""
     try:
+        if HEARTBEAT_FILE.is_symlink():
+            _LOGGER.warning("Heartbeat file is a symlink, refusing to touch it")
+            return
         HEARTBEAT_FILE.touch()
     except OSError as e:
         _LOGGER.debug(f"Cannot touch heartbeat file: {e}")
