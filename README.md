@@ -26,31 +26,72 @@ The main components of this project are:
 
 ## Usage
 
-You can run the Docker image using the following Docker Compose configuration:
+### Recommended: hardened, host-generated XML (Mode B)
+
+No `/dev`, no `privileged`. The container only reads one XML file. Mount the **directory**
+read-only (a single-file bind mount keeps a stale inode if the file is replaced by `mv`).
 
 ```yaml
 services:
   hdsentinel-mqtt:
-    image: ghcr.io/amargo/hdsentinel-mqtt
+    image: ghcr.io/amargo/hdsentinel-mqtt:latest   # pin a version tag in production
     container_name: hdsentinel-mqtt-ha
-    privileged: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
+    tmpfs:
+      - /tmp
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
     environment:
-      - PUID=1000
-      - PGID=1000
       - TZ=Europe/Budapest
       - MQTT_HOST=localhost
-      - MQTT_PORT=1883                               # Optional, defaults to 1883
-      - MQTT_USER=mqtt_user                          # Optional
-      - MQTT_PASSWORD=mqtt_password                  # Optional
-      - MQTT_USE_TLS=0                               # Optional, enable TLS (0 = off, 1 = on)
-      - MQTT_TOPIC=hdsentinel                        # Optional, base topic for MQTT messages
-      - HDSENTINEL_XML_PATH=/app/hdsentinel_output.xml  # Path to the HDSentinel XML output file
-      - HDSENTINEL_INTERVAL=600                         # Interval in seconds between HDSentinel checks
-      - DEBUG=0                                         # Debug mode (0 = off, 1 = on)
+      - MQTT_USER=mqtt_user
+      - MQTT_PASSWORD_FILE=/run/secrets/mqtt_password   # or MQTT_PASSWORD=...
+      - MQTT_TOPIC=hdsentinel
+      - HDSENTINEL_XML_PATH=/data/hdsentinel_output.xml
+      - HDSENTINEL_INTERVAL=600
+    volumes:
+      - /srv/hdsentinel:/data:ro
+    secrets:
+      - mqtt_password
+
+secrets:
+  mqtt_password:
+    file: ./mqtt_password.txt   # chmod 600
+```
+
+The host writes the XML atomically (cron, every 10 minutes):
+
+```cron
+*/10 * * * * /root/hdsentinel -solid -xml -r /srv/hdsentinel/hdsentinel_output.xml.tmp && mv /srv/hdsentinel/hdsentinel_output.xml.tmp /srv/hdsentinel/hdsentinel_output.xml
+```
+
+If the XML is older than `2 x HDSENTINEL_INTERVAL + 60 s` (cron stopped), the disks are marked
+`offline` in Home Assistant instead of showing frozen values.
+
+### Mode A: container runs HDSentinel itself
+
+Needs disk access (not possible inside unprivileged LXC / most VMs):
+
+```yaml
+services:
+  hdsentinel-mqtt:
+    image: ghcr.io/amargo/hdsentinel-mqtt:latest
+    privileged: true          # or devices: [...] + group_add (see Security)
+    environment:
+      - MQTT_HOST=localhost
     volumes:
       - /dev:/dev
-      - /srv/hdsentinel/hdsentinel_output.xml:/app/hdsentinel_output.xml
-    restart: always
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
 ```
 
 ## HDSentinel XML generation modes
@@ -111,20 +152,25 @@ This approach avoids disk access and permission issues inside containers on PVE 
 | `MQTT_PORT` | MQTT broker port | No | `1883` |
 | `MQTT_USER` | MQTT username for authentication | No | - |
 | `MQTT_PASSWORD` | MQTT password for authentication | No | - |
+| `MQTT_PASSWORD_FILE` | Read the password from this file (Docker secret); wins over `MQTT_PASSWORD` | No | - |
 | `MQTT_USE_TLS` | Enable TLS for MQTT connection (0 = off, 1 = on) | No | `0` |
+| `MQTT_TLS_CA_CERT` | CA bundle path for the broker certificate (default: system CAs) | No | - |
+| `MQTT_TLS_INSECURE` | Skip certificate verification (1 = on, **not recommended**) | No | `0` |
+| `MQTT_NAME_PREFIX` | Display-name prefix (e.g. host name) for devices/entities. Does not change `unique_id`, topics or identifiers | No | - |
 | `MQTT_TOPIC` | Base topic for MQTT messages | No | `hdsentinel` |
-| `HDSENTINEL_XML_PATH` | Path to the HDSentinel XML output file | No | `/app/hdsentinel_output.xml` |
-| `HDSENTINEL_INTERVAL` | Interval in seconds between HDSentinel checks | No | `600` |
+| `HDSENTINEL_XML_PATH` | Mode B: path of the host-generated XML (container does not run HDSentinel) | No | unset (Mode A, writes to `/tmp`) |
+| `HDSENTINEL_INTERVAL` | Interval in seconds between checks (minimum 10) | No | `600` |
+| `HDSENTINEL_HEARTBEAT_FILE` | Healthcheck heartbeat file | No | `/tmp/hdsentinel.heartbeat` |
 | `DEBUG` | Enable debug logging (0 = off, 1 = on) | No | `0` |
 | `TZ` | Timezone | No | - |
-| `PUID` | User ID for permissions | No | - |
-| `PGID` | Group ID for permissions | No | - |
 
 ## Security Considerations
 
 ### Container Privileges
 
-The container requires access to disk devices to read SMART data. There are several ways to configure this access:
+In **Mode B** (recommended, especially on Proxmox/LXC) the container needs no devices, no capabilities and no write access: use the hardened compose above.
+
+In **Mode A** the container requires access to disk devices to read SMART data. There are several ways to configure this access:
 
 #### Option 1: Privileged Mode (easiest but least secure)
 
@@ -179,13 +225,14 @@ To find your host's disk group ID, run: `getent group disk | cut -d: -f3`
 
 To improve MQTT security:
 
-1. **Enable TLS**: Set `MQTT_USE_TLS=1` to encrypt MQTT traffic
-2. **Use Authentication**: Always set `MQTT_USER` and `MQTT_PASSWORD`
-3. **Restrict Topics**: Configure your MQTT broker to restrict publishing/subscribing to only necessary topics
+1. **Enable TLS**: Set `MQTT_USE_TLS=1` (and `MQTT_TLS_CA_CERT` for a private CA) to encrypt MQTT traffic. The certificate is verified by default
+2. **Use Authentication**: Always set `MQTT_USER` and `MQTT_PASSWORD` (prefer `MQTT_PASSWORD_FILE`)
+3. **Restrict Topics**: The client needs write on `hdsentinel/#` and `homeassistant/+/hdsentinel_+/#`, and read on `homeassistant/status` (to re-publish discovery after a Home Assistant restart; optional)
+4. **Availability**: each disk has a retained `online`/`offline` topic plus an MQTT last will, so a crashed container turns entities unavailable immediately
 
 ### Non-Root User
 
-The container now runs as a non-root user (`hdsentinel`) for improved security, while still maintaining the ability to access disk devices through the privileged container mode.
+The container runs as a non-root user (`hdsentinel`, uid 1000). The HDSentinel download is verified with a pinned SHA256 at build time, and the image contains no build tools. The healthcheck passes while the main loop keeps running.
 
 ## Sensor Explanations
 
@@ -267,8 +314,8 @@ This ensures each physical disk is tracked independently, regardless of model na
 ### Common Issues
 
 1. **No disks detected**
-   - Ensure the container has privileged access
-   - Verify volume mapping `/dev:/dev` is correct
+   - Mode A only: ensure the container has disk access (`privileged` or `devices`) and `/dev:/dev`
+   - Mode B: check the XML exists as a **file** on the host before starting the container
    - Check logs with `docker logs hdsentinel-mqtt-ha`
 
 2. **MQTT connection failures**

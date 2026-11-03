@@ -4,10 +4,14 @@ import logging
 import os
 import signal
 import re
+import ssl
 import sys
+import tempfile
+import threading
 import time
-import paho.mqtt.publish as publish
+import paho.mqtt.client as mqtt
 import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as SafeET
 import subprocess
 from typing import Any, Dict, List, NamedTuple, Optional, Union, Tuple
 
@@ -36,10 +40,18 @@ BASE_DIR = __FILE.parent
 
 MQTT_CLIENT_ID = __FILE.name
 # Define the command used to run this script (used for documentation/reference)
-SCRIPT_ENTRYPOINT = ["python", "app/hdsentinel-parser.py"]
+SCRIPT_ENTRYPOINT = ["python", "app/hdsentinel_parser.py"]
+
+HA_STATUS_TOPIC = "homeassistant/status"
+MAX_XML_BYTES = 5 * 1024 * 1024
+MIN_INTERVAL = 10
+HEARTBEAT_FILE = Path(
+    os.getenv("HDSENTINEL_HEARTBEAT_FILE")
+    or Path(tempfile.gettempdir()).joinpath("hdsentinel.heartbeat")
+)
 
 update_interval = 600
-exiting_main_loop = False
+stop_event = threading.Event()
 
 
 class Config:
@@ -56,10 +68,13 @@ class Config:
         firmware,
         mqtt_state_topic: str,
         mqtt_availability_topic: str,
+        name_prefix: str = "",
     ):
 
         self.__serial_no = serial_no
         self.__alias = alias
+        # Display-only prefix; never touches unique_id / identifiers / topics
+        self.__display_name = f"{name_prefix}_{alias}" if name_prefix else alias
         self.__model = model
         self.__firmware = firmware
         self.__mqtt_state_topic = mqtt_state_topic
@@ -111,13 +126,13 @@ class Config:
                     f"hdsentinel_{self.__serial_no}",
                 ],
                 "manufacturer": "hdsentinel",
-                "name": self.__alias,
+                "name": self.__display_name,
                 "model": self.__model,
                 "sw_version": self.__firmware,
             },
             "expire_after": ceil(1.5 * update_interval),
             "unique_id": f"hdsentinel_{self.__serial_no}_{query_key}",
-            "name": f"{self.__alias}_{name}",
+            "name": f"{self.__display_name}_{name}",
             "availability_topic": self.__availability_topic,
             "state_topic": self.__mqtt_state_topic,
             "json_attributes_topic": self.__mqtt_state_topic,
@@ -143,104 +158,190 @@ class Config:
 
 
 class MqttClient:
-    """MQTT client for publishing messages."""
-    
+    """Persistent MQTT client (single connection, auto-reconnect, optional LWT)."""
+
     def __init__(
-        self, broker_host: str, broker_port: int, broker_auth: Optional[dict] = None,
-        use_tls: bool = False
+        self,
+        broker_host: str,
+        broker_port: int,
+        broker_auth: Optional[dict] = None,
+        use_tls: bool = False,
+        tls_ca_cert: Optional[str] = None,
+        tls_insecure: bool = False,
+        client_id: str = MQTT_CLIENT_ID,
+        will_topic: Optional[str] = None,
+        will_payload: Optional[str] = None,
     ):
-        """Initialize MQTT client.
-        
+        """Initialize and start the MQTT client.
+
         Args:
             broker_host (str): MQTT broker hostname
             broker_port (int): MQTT broker port
-            broker_auth (Optional[dict], optional): Authentication credentials. Defaults to None.
-            use_tls (bool, optional): Whether to use TLS. Defaults to False.
+            broker_auth (Optional[dict]): {"username": ..., "password": ...}
+            use_tls (bool): Whether to use TLS
+            tls_ca_cert (Optional[str]): CA bundle path (defaults to system CAs)
+            tls_insecure (bool): Skip certificate verification (not recommended)
+            client_id (str): Unique client id (one connection per id)
+            will_topic (Optional[str]): Retained last-will topic
+            will_payload (Optional[str]): Last-will payload
         """
-        self.__connection_options = {
-            "hostname": broker_host,
-            "port": broker_port,
-            "auth": broker_auth,
-            "client_id": MQTT_CLIENT_ID,
-        }
-        
+        self.__host = broker_host
+        self.__port = broker_port
+        self.__last_info = None
+
+        self.__client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION2, client_id=client_id
+        )
+        if broker_auth:
+            self.__client.username_pw_set(
+                broker_auth["username"], broker_auth["password"]
+            )
         if use_tls:
-            self.__connection_options["tls"] = {}
+            if tls_insecure:
+                _LOGGER.warning("MQTT TLS certificate verification is DISABLED")
+                self.__client.tls_set(cert_reqs=ssl.CERT_NONE)
+                self.__client.tls_insecure_set(True)
+            else:
+                self.__client.tls_set(ca_certs=tls_ca_cert or None)
+        if will_topic:
+            self.__client.will_set(will_topic, will_payload, qos=1, retain=True)
 
-    def publish_multiple(self, payloads: List[Dict[str, Any]], **kwargs) -> None:
-        """Publish multiple messages.
-        
-        Args:
-            payloads (List[Dict[str, Any]]): List of payloads to publish
-        """
+        self.__client.reconnect_delay_set(min_delay=1, max_delay=120)
+        # Bound the offline queue (sensors + discovery fit comfortably)
+        self.__client.max_queued_messages_set(500)
+        self.__client.on_connect = self.__handle_connect
+        self.__client.on_disconnect = self.__handle_disconnect
+        self.__client.on_message = self.__handle_message
+
+        self.__client.connect_async(self.__host, self.__port, keepalive=60)
+        self.__client.loop_start()
+
+    # --- callbacks -----------------------------------------------------
+    def __handle_connect(self, client, userdata, flags, reason_code, properties):
+        if reason_code.is_failure:
+            _LOGGER.error(f"MQTT connect failed: {reason_code}")
+            return
+        _LOGGER.info(f"MQTT connected to {self.__host}:{self.__port}")
         try:
-            publish.multiple(payloads, **self.__connection_options, **kwargs)
+            self._on_connected()
         except Exception as e:
-            _LOGGER.error(f"Failed to publish multiple messages: {e}")
+            _LOGGER.error(f"Error in on_connected hook: {e}")
 
-    def publish_single(self, topic: str, payload: str, **kwargs) -> None:
-        """Publish a single message.
-        
-        Args:
-            topic (str): Topic to publish to
-            payload (str): Payload to publish
-        """
+    def __handle_disconnect(self, client, userdata, flags, reason_code, properties):
+        if reason_code.is_failure:
+            _LOGGER.warning(f"MQTT disconnected unexpectedly: {reason_code}")
+
+    def __handle_message(self, client, userdata, message):
         try:
-            publish.single(topic, payload, **self.__connection_options, **kwargs)
+            self._on_message(message.topic, message.payload)
+        except Exception as e:
+            _LOGGER.error(f"Error handling message on {message.topic}: {e}")
+
+    def _on_connected(self) -> None:
+        """Hook: called after a successful (re)connect."""
+
+    def _on_message(self, topic: str, payload: bytes) -> None:
+        """Hook: called for subscribed messages."""
+
+    # --- API -----------------------------------------------------------
+    def subscribe(self, topic: str) -> None:
+        self.__client.subscribe(topic, qos=1)
+
+    def publish_single(
+        self, topic: str, payload: str, retain: bool = False, qos: int = 1
+    ) -> None:
+        """Queue a message; the network loop delivers it (and re-sends on reconnect)."""
+        try:
+            info = self.__client.publish(topic, payload, qos=qos, retain=retain)
+            if info.rc == mqtt.MQTT_ERR_NO_CONN:
+                # paho queues QoS>0 messages while offline and sends on reconnect
+                _LOGGER.debug(f"Not connected, queued message for {topic}")
+            elif info.rc != mqtt.MQTT_ERR_SUCCESS:
+                _LOGGER.error(f"Failed to publish message to {topic}: rc={info.rc}")
+            self.__last_info = info
         except Exception as e:
             _LOGGER.error(f"Failed to publish message to {topic}: {e}")
 
+    def publish_multiple(self, payloads: List[Dict[str, Any]], **kwargs) -> None:
+        """Publish multiple messages (dicts with topic/payload/retain)."""
+        for msg in payloads:
+            self.publish_single(
+                msg["topic"],
+                msg["payload"],
+                retain=msg.get("retain", False),
+                qos=msg.get("qos", 1),
+            )
+
+    def stop(self, timeout: float = 5.0) -> None:
+        """Flush the last queued message, then disconnect cleanly."""
+        try:
+            if self.__last_info is not None:
+                self.__last_info.wait_for_publish(timeout=timeout)
+        except Exception as e:
+            _LOGGER.debug(f"Flush on stop failed: {e}")
+        finally:
+            self.__client.disconnect()
+            self.__client.loop_stop()
+
 
 class HaCapableMqttClient(MqttClient):
-    """MQTT client with Home Assistant capabilities."""
-    
+    """MQTT client with Home Assistant availability (retained + LWT) and discovery."""
+
     def __init__(self, base_topic: str, **kwargs):
         """Initialize Home Assistant capable MQTT client.
-        
+
         Args:
             base_topic (str): Base topic
         """
         self.__base_topic = base_topic
         self.__status_topic = self.get_abs_topic("availability")
         self.__published_status = None
+        self.__discovery_msgs: List[Dict[str, Any]] = []
 
-        super().__init__(**kwargs)
+        super().__init__(
+            will_topic=self.__status_topic,
+            will_payload="offline",
+            **kwargs,
+        )
 
     @property
     def status_topic(self) -> str:
-        """Get status topic.
-        
-        Returns:
-            str: Status topic
-        """
+        """Get status topic."""
         return self.__status_topic
 
     def get_abs_topic(self, *relative_topic: str) -> str:
-        """Get absolute topic.
-        
-        Args:
-            *relative_topic (str): Relative topic parts
-            
-        Returns:
-            str: Absolute topic
-        """
+        """Get absolute topic."""
         return "/".join([self.__base_topic] + list(relative_topic))
 
+    def set_discovery_messages(self, msgs: List[Dict[str, Any]]) -> None:
+        """Store discovery configs; re-sent on every reconnect / HA restart."""
+        self.__discovery_msgs = msgs
+        self.publish_multiple(msgs)
+
+    def _on_connected(self) -> None:
+        self.subscribe(HA_STATUS_TOPIC)
+        self.__republish()
+
+    def _on_message(self, topic: str, payload: bytes) -> None:
+        if topic == HA_STATUS_TOPIC and payload.strip() == b"online":
+            _LOGGER.info("Home Assistant came online, re-publishing discovery")
+            self.__republish()
+
+    def __republish(self) -> None:
+        if self.__discovery_msgs:
+            self.publish_multiple(self.__discovery_msgs)
+        status, self.__published_status = self.__published_status, None
+        if status:
+            self.__publish_status(status)
+
     def __publish_status(self, status: str) -> None:
-        """Publish status.
-        
-        Args:
-            status (str): Status to publish
-        """
+        """Publish retained availability status (deduplicated)."""
         if status == self.__published_status:
             return
 
         _LOGGER.info(f"Publishing status: {status}")
-        try:
-            self.publish_single(self.__status_topic, status, retain=True)
-            self.__published_status = status
-        except Exception as e:
-            _LOGGER.error(f"Failed to publish status {status}: {e}")
+        self.publish_single(self.__status_topic, status, retain=True)
+        self.__published_status = status
 
     def publish_online_status(self) -> None:
         """Publish online status."""
@@ -282,8 +383,10 @@ def get_disks() -> Dict[str, Dict[str, Any]]:
     Returns:
         Dict[str, Dict[str, Any]]: Dictionary of disk information, keyed by serial number
     """
+    # Mode A writes into the temp dir so the root filesystem can be read-only.
     hdsentinel_output = os.getenv(
-        "HDSENTINEL_XML_PATH", BASE_DIR.joinpath("hdsentinel_output.xml")
+        "HDSENTINEL_XML_PATH",
+        Path(tempfile.gettempdir()).joinpath("hdsentinel_output.xml"),
     )
 
     if os.getenv("HDSENTINEL_XML_PATH") is None:
@@ -303,8 +406,11 @@ def get_disks() -> Dict[str, Dict[str, Any]]:
     _LOGGER.info("Parsing xml with hdsentinel...")
     
     try:
-        hdsentinel_xml = ET.parse(hdsentinel_output)
-        
+        if os.path.getsize(hdsentinel_output) > MAX_XML_BYTES:
+            _LOGGER.error(f"XML larger than {MAX_XML_BYTES} bytes, refusing to parse")
+            return {}
+        hdsentinel_xml = SafeET.parse(hdsentinel_output)
+
         for disk_summary in hdsentinel_xml.findall(".//Hard_Disk_Summary"):
             try:
                 disk_summary_str = ET.tostring(disk_summary, method="xml")
@@ -320,11 +426,58 @@ def get_disks() -> Dict[str, Dict[str, Any]]:
             except Exception as e:
                 _LOGGER.error(f"Error processing disk summary: {e}")
                 continue
-    except (ET.ParseError, FileNotFoundError) as e:
+    except (ET.ParseError, OSError) as e:
         _LOGGER.error(f"Failed to parse XML: {e}")
         return {}
 
     return hdsentinel_disk
+
+
+def xml_age_seconds() -> Optional[float]:
+    """Age of the externally generated XML (Mode B), None in Mode A / unreadable."""
+    path = os.getenv("HDSENTINEL_XML_PATH")
+    if not path:
+        return None
+    try:
+        return max(0.0, time.time() - os.path.getmtime(path))
+    except OSError:
+        return None
+
+
+def env_int(name: str, default: int, minimum: int = 0) -> int:
+    """Read an int env var, falling back to default when missing/invalid/too small."""
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        _LOGGER.warning(f"Invalid {name}={raw!r}, using {default}")
+        return default
+    if value < minimum:
+        _LOGGER.warning(f"{name}={value} below minimum {minimum}, using {minimum}")
+        return minimum
+    return value
+
+
+def read_secret(name: str) -> Optional[str]:
+    """Read NAME, or the file named by NAME_FILE (Docker/K8s secrets)."""
+    file_path = os.getenv(f"{name}_FILE")
+    if file_path:
+        try:
+            return Path(file_path).read_text(encoding="utf-8").strip()
+        except OSError as e:
+            _LOGGER.error(f"Cannot read {name}_FILE={file_path}: {e}")
+            return None
+    return os.getenv(name)
+
+
+def touch_heartbeat() -> None:
+    """Mark the main loop as alive for the container healthcheck."""
+    try:
+        HEARTBEAT_FILE.touch()
+    except OSError as e:
+        _LOGGER.debug(f"Cannot touch heartbeat file: {e}")
 
 
 def to_snake_case(name: str) -> str:
@@ -400,16 +553,19 @@ def isfloat(value: str) -> bool:
 
 def main() -> None:
     """Main function."""
-    global exiting_main_loop, update_interval
+    global update_interval
 
     # Configure environment variables
     debug_logging = os.getenv("DEBUG", "0") == "1"
-    mqtt_port = int(os.getenv("MQTT_PORT", 1883))
+    mqtt_port = env_int("MQTT_PORT", 1883, minimum=1)
     mqtt_host = os.getenv("MQTT_HOST")
     mqtt_user = os.getenv("MQTT_USER")
-    mqtt_password = os.getenv("MQTT_PASSWORD")
+    mqtt_password = read_secret("MQTT_PASSWORD")
     mqtt_use_tls = os.getenv("MQTT_USE_TLS", "0") == "1"
+    mqtt_tls_ca_cert = os.getenv("MQTT_TLS_CA_CERT") or None
+    mqtt_tls_insecure = os.getenv("MQTT_TLS_INSECURE", "0") == "1"
     mqtt_topic = os.getenv("MQTT_TOPIC", "hdsentinel")  # Default topic prefix
+    name_prefix = to_safe_id(os.getenv("MQTT_NAME_PREFIX", ""))
 
     mqtt_auth = (
         {"username": mqtt_user, "password": mqtt_password}
@@ -417,9 +573,9 @@ def main() -> None:
         else None
     )
 
-    update_interval = int(os.getenv("HDSENTINEL_INTERVAL", update_interval))
+    update_interval = env_int("HDSENTINEL_INTERVAL", update_interval, MIN_INTERVAL)
+    stale_after = 2 * update_interval + 60
 
-    _LOGGER.info("Configure logging...")
     configure_logging(debug_logging)
 
     if not mqtt_host:
@@ -428,13 +584,25 @@ def main() -> None:
 
     _LOGGER.info("Get initial data from hdsentinel...")
     disks = get_disks()
-    
+
     if not disks:
         _LOGGER.error("No disks found or error getting disk data. Exiting.")
         sys.exit(1)
 
-    configs = {}
-    mqtt_clients = {}
+    configs: Dict[str, Config] = {}
+    mqtt_clients: Dict[str, HaCapableMqttClient] = {}
+
+    def make_client(alias: str) -> HaCapableMqttClient:
+        return HaCapableMqttClient(
+            f"{mqtt_topic}/{alias}",
+            broker_host=mqtt_host,
+            broker_port=mqtt_port,
+            broker_auth=mqtt_auth,
+            use_tls=mqtt_use_tls,
+            tls_ca_cert=mqtt_tls_ca_cert,
+            tls_insecure=mqtt_tls_insecure,
+            client_id=f"{MQTT_CLIENT_ID}-{alias}"[:128],
+        )
 
     for disk_serial_number, values in disks.items():
         try:
@@ -444,14 +612,8 @@ def main() -> None:
                 disk_serial_number,
             )
             _LOGGER.info(f"Using alias: {alias}")
-            
-            mqtt_client = HaCapableMqttClient(
-                f"{mqtt_topic}/{alias}",
-                broker_host=mqtt_host,
-                broker_port=mqtt_port,
-                broker_auth=mqtt_auth,
-                use_tls=mqtt_use_tls
-            )
+
+            mqtt_client = make_client(alias)
             mqtt_clients[disk_serial_number] = mqtt_client
 
             disk_state_topic = mqtt_client.get_abs_topic("hdsentinel")
@@ -462,6 +624,7 @@ def main() -> None:
                 values.get("Firmware_Revision", "Unknown"),
                 disk_state_topic,
                 mqtt_client.status_topic,
+                name_prefix,
             )
             _LOGGER.info(
                 f"Configuring Home Assistant via MQTT Discovery... {mqtt_host}:{mqtt_port}-{alias}"
@@ -477,7 +640,7 @@ def main() -> None:
             ]
 
             _LOGGER.info(f"Publishing {len(discovery_msgs)} sensors for {alias}")
-            mqtt_client.publish_multiple(discovery_msgs)
+            mqtt_client.set_discovery_messages(discovery_msgs)
             configs[disk_serial_number] = config
         except Exception as e:
             _LOGGER.error(f"Error setting up disk {disk_serial_number}: {e}")
@@ -486,70 +649,62 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop_main_loop)
     signal.signal(signal.SIGTERM, stop_main_loop)
 
-    exiting_main_loop = False
     try:
-        while True:
+        while not stop_event.is_set():
             try:
-                disks = get_disks()
-                
-                for disk_serial_number, values in disks.items():
-                    try:
-                        config = configs.get(disk_serial_number)
+                age = xml_age_seconds()
+                if age is not None and age > stale_after:
+                    _LOGGER.warning(
+                        f"HDSentinel XML is stale ({int(age)}s old), marking disks offline"
+                    )
+                    for client in mqtt_clients.values():
+                        client.publish_offline_status()
+                else:
+                    disks = get_disks()
 
-                        # Skip disks that weren't in the initial configuration
-                        if not config:
-                            _LOGGER.warning(
-                                f"Skipping new disk {disk_serial_number} that wasn't in initial configuration"
+                    for disk_serial_number, values in disks.items():
+                        try:
+                            config = configs.get(disk_serial_number)
+
+                            # Skip disks that weren't in the initial configuration
+                            if not config:
+                                _LOGGER.warning(
+                                    f"Skipping new disk {disk_serial_number} that wasn't in initial configuration"
+                                )
+                                continue
+
+                            mqtt_client = mqtt_clients[disk_serial_number]
+                            disk_state_topic = mqtt_client.get_abs_topic("hdsentinel")
+
+                            main_loop(mqtt_client, disk_state_topic, config, values)
+                        except Exception as e:
+                            _LOGGER.error(
+                                f"Error processing disk {disk_serial_number}: {e}"
                             )
                             continue
-
-                        mqtt_client = mqtt_clients.get(disk_serial_number)
-                        if not mqtt_client:
-                            _LOGGER.warning(
-                                f"No MQTT client for {disk_serial_number}, creating new one"
-                            )
-                            mqtt_client = HaCapableMqttClient(
-                                f"{mqtt_topic}/{config.alias}",
-                                broker_host=mqtt_host,
-                                broker_port=mqtt_port,
-                                broker_auth=mqtt_auth,
-                                use_tls=mqtt_use_tls
-                            )
-                            mqtt_clients[disk_serial_number] = mqtt_client
-                            
-                        disk_state_topic = mqtt_client.get_abs_topic("hdsentinel")
-
-                        main_loop(mqtt_client, disk_state_topic, config, values)
-                    except Exception as e:
-                        _LOGGER.error(f"Error processing disk {disk_serial_number}: {e}")
-                        continue
             except Exception as e:
                 _LOGGER.error(f"Error in main loop: {e}")
 
-            # Sleep with interruption support
-            for _ in range(update_interval * 2):
-                time.sleep(0.5)
+            touch_heartbeat()
 
-                if exiting_main_loop:
-                    _LOGGER.info("Exiting main loop due to signal")
-                    sys.exit(0)
-
-    except Exception as e:
-        _LOGGER.error(f"Unexpected error in main loop: {e}")
+            # Wakes up immediately on SIGTERM/SIGINT
+            if stop_event.wait(update_interval):
+                _LOGGER.info("Exiting main loop due to signal")
+                break
     finally:
-        # Publish offline status for all clients
+        # Publish offline status, flush, disconnect cleanly
         for serial, client in mqtt_clients.items():
             try:
                 _LOGGER.info(f"Publishing offline status for {serial}")
                 client.publish_offline_status()
+                client.stop()
             except Exception as e:
                 _LOGGER.error(f"Error publishing offline status for {serial}: {e}")
 
 
 def stop_main_loop(*args) -> None:
-    global exiting_main_loop
-    exiting_main_loop = True
     _LOGGER.info("Exiting main loop...")
+    stop_event.set()
 
 
 def main_loop(

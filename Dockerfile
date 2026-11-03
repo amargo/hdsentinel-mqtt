@@ -1,43 +1,41 @@
-FROM python:3.14-alpine
+# syntax=docker/dockerfile:1
+
+# ---- Stage 1: fetch and verify the HDSentinel binary ----
+FROM python:3.14-alpine AS fetch
 ARG HDSENTINEL_VERSION="020c"
-ENV HDSENTINEL_URL=https://www.hdsentinel.com/hdslin/hdsentinel-$HDSENTINEL_VERSION-x64.zip
+# SHA256 of hdsentinel-${HDSENTINEL_VERSION}-x64.zip. Update together with the version.
+ARG HDSENTINEL_SHA256="7f13dfa26110da80050fe7d538937b55ddbbae73fe077248f9cddcb6e857373b"
+RUN apk add --no-cache ca-certificates unzip wget && \
+    wget -q "https://www.hdsentinel.com/hdslin/hdsentinel-${HDSENTINEL_VERSION}-x64.zip" -O /tmp/hdsentinel.zip && \
+    echo "${HDSENTINEL_SHA256}  /tmp/hdsentinel.zip" | sha256sum -c - && \
+    unzip -p /tmp/hdsentinel.zip HDSentinel > /hdsentinel && \
+    chmod 0555 /hdsentinel
 
-# Create a non-root user with explicit UID/GID
-ENV USER_ID=1000
-ENV GROUP_ID=1000
+# ---- Stage 2: runtime ----
+FROM python:3.14-alpine
 
-# Download and install hdsentinel and set up environment
-RUN apk add --no-cache ca-certificates util-linux unzip wget shadow && \
-    wget ${HDSENTINEL_URL} -O /tmp/hdsentinel.zip && \
-    unzip -p /tmp/hdsentinel.zip HDSentinel > "/usr/sbin/hdsentinel" && \
-    chmod +x "/usr/sbin/hdsentinel" && \
-    rm /tmp/hdsentinel.zip && \
-    # Create user with specific ID and add to disk group
-    addgroup -g ${GROUP_ID} hdsentinel && \
-    adduser -D -u ${USER_ID} -G hdsentinel -G disk hdsentinel && \
-    # Create app directory and set permissions
-    mkdir -p /app && \
-    chown -R hdsentinel:hdsentinel /app
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
-# Set working directory
+# Non-root user (primary group hdsentinel, supplementary group disk for Mode A)
+RUN apk add --no-cache ca-certificates util-linux && \
+    addgroup -g 1000 hdsentinel && \
+    adduser -D -u 1000 -G hdsentinel hdsentinel && \
+    addgroup hdsentinel disk
+
+# Only used in Mode A (HDSENTINEL_XML_PATH not set)
+COPY --from=fetch /hdsentinel /usr/sbin/hdsentinel
+
 WORKDIR /app
-
-# Switch to non-root user for pip operations
 USER hdsentinel
 
-# Copy requirements and install as non-root
 COPY --chown=hdsentinel:hdsentinel requirements.txt /app/
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code as non-root
 COPY --chown=hdsentinel:hdsentinel app /app
 
-# Define volume for device access
-VOLUME /dev
-
-# Health check
+# Healthy while the main loop keeps touching the heartbeat file
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-  CMD pgrep -f "python hdsentinel-parser.py" || exit 1
+  CMD ["python", "healthcheck.py"]
 
-ENTRYPOINT ["python", "hdsentinel-parser.py"]
+ENTRYPOINT ["python", "hdsentinel_parser.py"]

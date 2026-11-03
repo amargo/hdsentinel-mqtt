@@ -29,12 +29,45 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
+  test:
+    name: Test and scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install pytest -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest -q app
+
+      - name: Scan Dockerfile and dependencies (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
   build-and-push-docker-image:
     name: Build image
+    needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     env:
       IMAGE_NAME: hdsentinel-mqtt-ha
     steps:

@@ -14,7 +14,7 @@
     "after 1am and before 5am on friday"
   ],
   "prHourlyLimit": 0,
-  "prConcurrentLimit": 10,
+  "prConcurrentLimit": 2,
   "enabledManagers": [
     "dockerfile",
     "pip_requirements",
@@ -45,65 +45,22 @@
       "pinDigests": false
     },
     {
-      "matchManagers": [
-        "dockerfile",
-        "devcontainer"
-      ],
-      "matchUpdateTypes": [
-        "minor"
-      ],
-      "groupName": "🐋 Docker minor updates",
-      "automerge": true,
-      "pinDigests": false
-    },
-    {
-      "matchManagers": [
-        "dockerfile",
-        "devcontainer"
-      ],
-      "matchUpdateTypes": [
-        "major"
-      ],
-      "groupName": "🚢 Docker major updates",
-      "pinDigests": false
-    },
-    {
-      "matchManagers": [
-        "pip_requirements"
-      ],
-      "matchUpdateTypes": [
-        "minor"
-      ],
-      "groupName": "🐍 Python minor updates",
-      "automerge": true
-    },
-    {
-      "matchManagers": [
-        "pip_requirements"
-      ],
-      "matchUpdateTypes": [
-        "major"
-      ],
-      "groupName": "🐍 Python major updates",
-      "automerge": false
-    },
-    {
-      "matchManagers": [
-        "github-actions"
-      ],
+      "description": "One PR for every non-major update across all managers",
       "matchUpdateTypes": [
         "minor",
-        "patch"
+        "patch",
+        "digest"
       ],
-      "groupName": "⚡ GitHub Actions updates",
+      "groupName": "📦 Non-major updates",
       "automerge": true
     },
     {
+      "description": "One PR for every major update across all managers (manual review)",
       "matchUpdateTypes": [
-        "patch"
+        "major"
       ],
-      "groupName": "🔖 Patch updates",
-      "automerge": true
+      "groupName": "🚀 Major updates",
+      "automerge": false
     }
   ]
 }

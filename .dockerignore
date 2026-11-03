@@ -1,5 +1,10 @@
 .git
 .github
 .vscode
+.pytest_cache
 **/.env
 **/*.pyc
+**/__pycache__
+app/test_*.py
+*.md
+setup.sh

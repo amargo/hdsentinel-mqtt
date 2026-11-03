@@ -13,7 +13,8 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.hdsentinel_parser import (
     get_disks, to_snake_case, to_safe_id, build_disk_alias, check_if_number, to_number, isfloat,
-    MqttClient, HaCapableMqttClient, Config, main_loop
+    MqttClient, HaCapableMqttClient, Config, main_loop,
+    env_int, read_secret, xml_age_seconds
 )
 
 
@@ -93,7 +94,7 @@ class TestHdSentinelParser(unittest.TestCase):
     @patch('app.hdsentinel_parser.subprocess.run')
     @patch('app.hdsentinel_parser.os.path.getsize', return_value=1)
     @patch('app.hdsentinel_parser.os.path.exists', return_value=True)
-    @patch('app.hdsentinel_parser.ET.parse')
+    @patch('app.hdsentinel_parser.SafeET.parse')
     def test_get_disks_with_subprocess(self, mock_parse, mock_exists, mock_getsize, mock_run, mock_getenv):
         """Test get_disks function when HDSENTINEL_XML_PATH is not set."""
         # Set up the mock to return None for HDSENTINEL_XML_PATH env var
@@ -171,38 +172,123 @@ class TestHdSentinelParser(unittest.TestCase):
         self.assertFalse(isfloat("38 C"))
         self.assertFalse(isfloat(""))
 
-    @patch('app.hdsentinel_parser.publish')
-    def test_mqtt_client(self, mock_publish):
-        """Test MqttClient class."""
+    @patch('app.hdsentinel_parser.mqtt.Client')
+    def test_mqtt_client(self, mock_client_cls):
+        """Persistent client: connects async, publishes via the shared connection."""
         client = MqttClient("localhost", 1883, {"username": "user", "password": "pass"}, True)
-        
-        # Test publish_single
-        client.publish_single("test/topic", "test_payload")
-        mock_publish.single.assert_called_once()
-        
-        # Test publish_multiple
-        payloads = [{"topic": "test/topic1", "payload": "payload1"}, {"topic": "test/topic2", "payload": "payload2"}]
-        client.publish_multiple(payloads)
-        mock_publish.multiple.assert_called_once()
+        paho = mock_client_cls.return_value
+        paho.publish.return_value.rc = 0
 
-    @patch('app.hdsentinel_parser.publish')
-    def test_ha_capable_mqtt_client(self, mock_publish):
-        """Test HaCapableMqttClient class."""
+        paho.username_pw_set.assert_called_once_with("user", "pass")
+        paho.tls_set.assert_called_once_with(ca_certs=None)
+        paho.connect_async.assert_called_once()
+        paho.loop_start.assert_called_once()
+
+        client.publish_single("test/topic", "test_payload")
+        paho.publish.assert_called_with("test/topic", "test_payload", qos=1, retain=False)
+
+        client.publish_multiple([
+            {"topic": "t1", "payload": "p1", "retain": True},
+            {"topic": "t2", "payload": "p2"},
+        ])
+        self.assertEqual(paho.publish.call_count, 3)
+        paho.publish.assert_any_call("t1", "p1", qos=1, retain=True)
+
+    @patch('app.hdsentinel_parser.mqtt.Client')
+    def test_mqtt_client_tls_insecure_disables_verification(self, mock_client_cls):
+        MqttClient("localhost", 8883, use_tls=True, tls_insecure=True)
+        paho = mock_client_cls.return_value
+        paho.tls_insecure_set.assert_called_once_with(True)
+
+    @patch('app.hdsentinel_parser.mqtt.Client')
+    def test_mqtt_client_tls_ca_cert(self, mock_client_cls):
+        MqttClient("localhost", 8883, use_tls=True, tls_ca_cert="/ca.pem")
+        mock_client_cls.return_value.tls_set.assert_called_once_with(ca_certs="/ca.pem")
+
+    @patch('app.hdsentinel_parser.mqtt.Client')
+    def test_ha_capable_mqtt_client(self, mock_client_cls):
+        """HA client: topics, retained LWT, deduplicated retained availability."""
         client = HaCapableMqttClient("hdsentinel/test_disk", broker_host="localhost", broker_port=1883)
-        
-        # Test get_abs_topic
-        topic = client.get_abs_topic("status")
-        self.assertEqual(topic, "hdsentinel/test_disk/status")
-        
-        # Test status_topic property
+        paho = mock_client_cls.return_value
+        paho.publish.return_value.rc = 0
+
+        self.assertEqual(client.get_abs_topic("status"), "hdsentinel/test_disk/status")
         self.assertEqual(client.status_topic, "hdsentinel/test_disk/availability")
-        
-        # Test publish_online_status
-        client.publish_online_status()
-        mock_publish.single.assert_called_with(
-            "hdsentinel/test_disk/availability", "online", 
-            hostname="localhost", port=1883, auth=None, client_id="hdsentinel_parser.py", retain=True
+
+        paho.will_set.assert_called_once_with(
+            "hdsentinel/test_disk/availability", "offline", qos=1, retain=True
         )
+
+        client.publish_online_status()
+        client.publish_online_status()  # deduplicated
+        paho.publish.assert_called_once_with(
+            "hdsentinel/test_disk/availability", "online", qos=1, retain=True
+        )
+
+    @patch('app.hdsentinel_parser.mqtt.Client')
+    def test_ha_client_republishes_on_reconnect_and_ha_birth(self, mock_client_cls):
+        client = HaCapableMqttClient("hdsentinel/d", broker_host="localhost", broker_port=1883)
+        paho = mock_client_cls.return_value
+        paho.publish.return_value.rc = 0
+
+        client.set_discovery_messages([{"topic": "homeassistant/sensor/x/config", "payload": "{}", "retain": True}])
+        client.publish_online_status()
+        paho.publish.reset_mock()
+
+        client._on_connected()  # broker (re)connect
+        paho.subscribe.assert_called_with("homeassistant/status", qos=1)
+        topics = [c.args[0] for c in paho.publish.call_args_list]
+        self.assertIn("homeassistant/sensor/x/config", topics)
+        self.assertIn("hdsentinel/d/availability", topics)
+
+        paho.publish.reset_mock()
+        client._on_message("homeassistant/status", b"online")  # HA restart
+        topics = [c.args[0] for c in paho.publish.call_args_list]
+        self.assertIn("homeassistant/sensor/x/config", topics)
+
+        paho.publish.reset_mock()
+        client._on_message("homeassistant/status", b"offline")
+        paho.publish.assert_not_called()
+
+    def test_env_int(self):
+        with patch.dict(os.environ, {"X_INT": "42"}):
+            self.assertEqual(env_int("X_INT", 1), 42)
+        with patch.dict(os.environ, {"X_INT": "abc"}):
+            self.assertEqual(env_int("X_INT", 7), 7)
+        with patch.dict(os.environ, {"X_INT": "1"}):
+            self.assertEqual(env_int("X_INT", 7, minimum=10), 10)
+        with patch.dict(os.environ, {}):
+            os.environ.pop("X_INT", None)
+            self.assertEqual(env_int("X_INT", 5), 5)
+
+    def test_read_secret(self):
+        with tempfile.TemporaryDirectory() as d:
+            secret = Path(d) / "pw"
+            secret.write_text("s3cret\n", encoding="utf-8")
+            with patch.dict(os.environ, {"MQTT_PASSWORD_FILE": str(secret), "MQTT_PASSWORD": "plain"}):
+                self.assertEqual(read_secret("MQTT_PASSWORD"), "s3cret")
+        with patch.dict(os.environ, {"MQTT_PASSWORD": "plain"}):
+            os.environ.pop("MQTT_PASSWORD_FILE", None)
+            self.assertEqual(read_secret("MQTT_PASSWORD"), "plain")
+
+    def test_xml_age_seconds(self):
+        with patch.dict(os.environ, {"HDSENTINEL_XML_PATH": self.temp_xml_file.name}):
+            age = xml_age_seconds()
+            self.assertIsNotNone(age)
+            self.assertLess(age, 60)
+        with patch.dict(os.environ, {"HDSENTINEL_XML_PATH": self.temp_xml_file.name + ".missing"}):
+            self.assertIsNone(xml_age_seconds())
+        with patch.dict(os.environ, {}):
+            os.environ.pop("HDSENTINEL_XML_PATH", None)
+            self.assertIsNone(xml_age_seconds())
+
+    def test_get_disks_rejects_directory_and_oversize(self):
+        with tempfile.TemporaryDirectory() as d:
+            with patch.dict(os.environ, {"HDSENTINEL_XML_PATH": d}):
+                self.assertEqual(get_disks(), {})  # Docker bind-mount created a dir
+        with patch.dict(os.environ, {"HDSENTINEL_XML_PATH": self.temp_xml_file.name}), \
+                patch('app.hdsentinel_parser.MAX_XML_BYTES', 10):
+            self.assertEqual(get_disks(), {})
 
     @patch('app.hdsentinel_parser.safe_load')
     @patch('app.hdsentinel_parser.Path.open', new_callable=mock_open, read_data='{}')
@@ -269,6 +355,19 @@ class TestHdSentinelParser(unittest.TestCase):
             json.dumps(expected_status, sort_keys=True)
         )
         mock_mqtt_client.publish_online_status.assert_called_once()
+
+    @patch('app.hdsentinel_parser.safe_load')
+    @patch('app.hdsentinel_parser.Path.open', new_callable=mock_open, read_data='{}')
+    def test_config_name_prefix_is_display_only(self, mock_file, mock_safe_load):
+        mock_safe_load.return_value = {"sensor": {"health": {"_key": "hard_disk_health", "_type": "int"}}}
+        config = Config("SER1", "model_ser1", "Model", "fw", "t/state", "t/avail", "nas1")
+        payload = config.sensors[0].payload
+        self.assertEqual(payload["device"]["name"], "nas1_model_ser1")
+        self.assertEqual(payload["name"], "nas1_model_ser1_health")
+        # Stable identifiers must not change
+        self.assertEqual(payload["unique_id"], "hdsentinel_SER1_hard_disk_health")
+        self.assertEqual(payload["device"]["identifiers"], ["hdsentinel_SER1"])
+        self.assertEqual(config.sensors[0].topic, "homeassistant/sensor/hdsentinel_model_ser1/hard_disk_health/config")
 
     def test_duplicate_disk_models_unique_aliases(self):
         """Test that duplicate disk models get unique aliases based on serial numbers."""
